@@ -38,6 +38,7 @@
 *.o.*
 *.patch
 *.s
+!*.S
 *.so
 *.so.dbg
 *.su
