@@ -92,6 +92,9 @@ jobs:
       - name: 生成 .config
         run: |
           set -e
+          # Windows 提交丢失 exec bit，Linux checkout 上被直接执行的脚本(cc-version.sh/setlocalversion等)需恢复
+          find scripts -type f -exec chmod +x {} +
+          find . -path ./out -prune -o -path ./.git -prune -o -type f -name '*.sh' -exec chmod +x {} +
           export PATH="$PWD/clang/bin:$PATH"
           export LLVM=1 LLVM_IAS=1 ARCH=arm64 SUBARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
