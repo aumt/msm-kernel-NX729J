@@ -1,0 +1,153 @@
+name: Build NX729J GKI (Red Magic 8S Pro)
+
+# 红魔 8S Pro (NX729S/NX729J, SM8550/kalama, Android 13, 5.15.41, GKI 2.0)
+# 直接 make 路线（非 ACK build.sh，因源码 zip 不含 build/ 目录）。
+# 关键：检入的 vendor/kalama-NX729J-gki_defconfig 是 2023 年 stock 合并产物（不含 KSU/droidspaces），
+#       编译前必须先跑 merge_config.sh 三合一重新生成，否则我们的改动进不了 .config。
+
+env:
+  TZ: Asia/Shanghai
+  CLANG_VER: clang-r450784d
+  CCACHE_KEY: nx729j-gki-5.15.41
+
+on:
+  workflow_dispatch:
+    inputs:
+      ccache_update:
+        description: '更新ccache缓存(源码/配置变更后开启)'
+        required: true
+        type: boolean
+        default: 'false'
+      package_ak3:
+        description: '打包 AnyKernel3 刷机包(卡刷/内核管理器刷入)'
+        required: true
+        type: boolean
+        default: 'true'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 安装依赖 + 下载 AOSP clang
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            binutils python-is-python3 libssl-dev libelf-dev libdw-dev bc dwarves ccache zip unzip
+          # clang-r450784d = android13-5.15 时代 clang-14（与 build.config.constants 里 pin 的 r450784e 同族，
+          # googlesource 上 r450784e 无 tag 可下，r450784d 确认可从 android-platform-13.0.0_r28 tag 下载）
+          echo "正在下载 clang-${{ env.CLANG_VER }} ..."
+          mkdir -p clang
+          curl -fL "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-platform-13.0.0_r28/clang-${{ env.CLANG_VER }}.tar.gz" -o clang.tar.gz
+          tar -xzf clang.tar.gz -C clang
+          rm -f clang.tar.gz
+          clang/bin/clang --version | head -n1
+          clang/bin/ld.lld --version | head -n1
+          pahole --version | head -n1 || true
+
+      - name: 配置 ccache
+        run: |
+          echo "CCACHE_DIR=$HOME/.ccache" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=3G" >> $GITHUB_ENV
+          echo "CCACHE_COMPILERCHECK=none" >> $GITHUB_ENV
+          echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
+          mkdir -p "$HOME/.ccache"
+          ccache -M 3G
+          ccache -o compression=true
+          echo "ccache 初始状态:"; ccache -s
+
+      - name: 载入 ccache 缓存
+        uses: actions/cache@v4
+        id: ccache-restore
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ env.CCACHE_KEY }}-${{ runner.os }}-${{ github.ref_name }}
+          restore-keys: |
+            ${{ env.CCACHE_KEY }}-${{ runner.os }}-
+            ${{ env.CCACHE_KEY }}-
+
+      - name: 合并 defconfig (gki + kalama_GKI + NX729J-perf_diff)
+        run: |
+          set -e
+          echo "=== 合并前确认 stock 合并 defconfig 无 KSU(应为 0) ==="
+          grep -c '^CONFIG_KSU' arch/arm64/configs/vendor/kalama-NX729J-gki_defconfig || true
+          echo "=== 三合一 merge (与 build.config.msm.common 同参数 -m -r -y) ==="
+          KCONFIG_CONFIG=arch/arm64/configs/vendor/kalama-NX729J-gki_defconfig \
+            scripts/kconfig/merge_config.sh -m -r -y \
+            arch/arm64/configs/gki_defconfig \
+            arch/arm64/configs/vendor/kalama_GKI.config \
+            arch/arm64/configs/vendor/NX729J-perf_diff.config
+          echo "=== 合并后 defconfig 含 KSU/droidspaces (阶段C验证点1) ==="
+          grep -E '^CONFIG_(KSU|SYSVIPC|POSIX_MQUEUE|IPC_NS|PID_NS|DEVTMPFS|USER_NS|NETFILTER_XT_MATCH_ADDRTYPE|NETFILTER_XT_TARGET_LOG|NETFILTER_XT_MATCH_RECENT|TMPFS_POSIX_ACL|TMPFS_XATTR|IP_SET|IP_SET_HASH_IP|IP_SET_HASH_NET|NETFILTER_XT_SET)=' arch/arm64/configs/vendor/kalama-NX729J-gki_defconfig
+          grep 'CONFIG_KSU_FULL_NAME_FORMAT' arch/arm64/configs/vendor/kalama-NX729J-gki_defconfig
+
+      - name: 生成 .config
+        run: |
+          set -e
+          export PATH="$PWD/clang/bin:$PATH"
+          export LLVM=1 LLVM_IAS=1 ARCH=arm64 SUBARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CC="ccache clang"
+          make -j$(nproc) O=out LLVM=1 ARCH=arm64 CC="$CC" LD=ld.lld OBJCOPY=llvm-objcopy vendor/kalama-NX729J-gki_defconfig
+          echo "=== .config 实际生效校验 (阶段C核心验证点2) ==="
+          grep -E '^CONFIG_(KSU|SYSVIPC|POSIX_MQUEUE|IPC_NS|PID_NS|DEVTMPFS|USER_NS|NETFILTER_XT_MATCH_ADDRTYPE|NETFILTER_XT_TARGET_LOG|NETFILTER_XT_MATCH_RECENT|IP_SET|BPF_SYSCALL|BPF_JIT|DEBUG_INFO_BTF)=' out/.config
+          echo "=== .config 中 KSU 必须为 =y ==="
+          grep '^CONFIG_KSU=' out/.config
+          grep '^CONFIG_KSU_FULL_NAME_FORMAT' out/.config
+
+      - name: 编译内核 Image
+        run: |
+          set -e
+          export PATH="$PWD/clang/bin:$PATH"
+          export LLVM=1 LLVM_IAS=1 ARCH=arm64 SUBARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CC="ccache clang"
+          # 去除 -dirty 后缀(编译期 merge 会改动检入的 defconfig 导致 git 树变脏)
+          sed -i 's/ -dirty//g' scripts/setlocalversion
+          sed -i '$i res=$(echo "$res" | sed '\''s/-dirty//g'\'')' scripts/setlocalversion
+          make -j$(nproc) O=out LLVM=1 ARCH=arm64 CC="$CC" LD=ld.lld OBJCOPY=llvm-objcopy Image
+          echo "=== 编译产物 ==="
+          ls -lh out/arch/arm64/boot/Image
+          cp out/.config ./compiled.config
+          echo "ccache 状态:"; ccache -s
+
+      - name: 保存 ccache 缓存
+        if: inputs.ccache_update || steps.ccache-restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ env.CCACHE_KEY }}-${{ runner.os }}-${{ github.ref_name }}
+
+      - name: 打包 AnyKernel3 刷机包
+        if: inputs.package_ak3
+        id: create_zip
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3 anykernel3
+          rm -rf anykernel3/.git
+          cd anykernel3
+          cp ../out/arch/arm64/boot/Image ./Image
+          if [[ ! -s ./Image ]]; then echo "未找到 Image，构建可能出错"; exit 1; fi
+          sed -i 's|kernel.string=.*|kernel.string=RedMagic8SPro-GKI|' anykernel.sh
+          sed -i 's|do.devicecheck=.*|do.devicecheck=0|' anykernel.sh
+          sed -i 's|supported.manufacturers=.*|supported.manufacturers=|' anykernel.sh
+          AK3_NAME="AnyKernel3-NX729J-5.15.41-ReSukiSU.zip"
+          zip -r9 "../$AK3_NAME" ./* -x '*.git*'
+          echo "ak3name=$AK3_NAME" >> "$GITHUB_OUTPUT"
+          echo "=== 刷机包已生成: $AK3_NAME ==="
+
+      - name: 上传工件
+        uses: actions/upload-artifact@v4
+        with:
+          name: NX729J-GKI-5.15.41
+          path: |
+            out/arch/arm64/boot/Image
+            compiled.config
+            AnyKernel3-NX729J-*.zip
+          retention-days: 14
