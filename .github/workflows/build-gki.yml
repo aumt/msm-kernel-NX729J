@@ -7,7 +7,7 @@ name: Build NX729J GKI (Red Magic 8S Pro)
 
 env:
   TZ: Asia/Shanghai
-  CLANG_VER: clang-r450784d
+  CLANG_VER: r450784d
   CCACHE_KEY: nx729j-gki-5.15.41
 
 on:
