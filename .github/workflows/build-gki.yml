@@ -75,11 +75,13 @@ jobs:
       - name: 合并 defconfig (gki + kalama_GKI + NX729J-perf_diff)
         run: |
           set -e
-          echo "=== 合并前确认 stock 合并 defconfig 无 KSU(应为 0) ==="
-          grep -c '^CONFIG_KSU' arch/arm64/configs/vendor/kalama-NX729J-gki_defconfig || true
-          echo "=== 三合一 merge (与 build.config.msm.common 同参数 -m -r -y) ==="
+          echo "=== 说明: vendor/kalama-NX729J-gki_defconfig 是 ACK build 产物(.gitignore:164 忽略)，不在源码内，本步将生成它 ==="
+          echo "=== 确认源片段 gki_defconfig 含 KSU/droidspaces (我们的改动所在) ==="
+          grep -E '^CONFIG_(KSU|SYSVIPC|POSIX_MQUEUE|IPC_NS|PID_NS|DEVTMPFS|USER_NS|NETFILTER_XT_MATCH_ADDRTYPE|NETFILTER_XT_TARGET_LOG|NETFILTER_XT_MATCH_RECENT|TMPFS_POSIX_ACL|TMPFS_XATTR|IP_SET|IP_SET_HASH_IP|IP_SET_HASH_NET|NETFILTER_XT_SET)=' arch/arm64/configs/gki_defconfig
+          grep 'CONFIG_KSU_FULL_NAME_FORMAT' arch/arm64/configs/gki_defconfig
+          echo "=== 三合一 merge (与 build.config.msm.common 同参数 -m -r -y；bash 调用避开 Windows 提交丢失 exec bit) ==="
           KCONFIG_CONFIG=arch/arm64/configs/vendor/kalama-NX729J-gki_defconfig \
-            scripts/kconfig/merge_config.sh -m -r -y \
+            bash scripts/kconfig/merge_config.sh -m -r -y \
             arch/arm64/configs/gki_defconfig \
             arch/arm64/configs/vendor/kalama_GKI.config \
             arch/arm64/configs/vendor/NX729J-perf_diff.config
