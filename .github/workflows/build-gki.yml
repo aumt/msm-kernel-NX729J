@@ -36,6 +36,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 240
     permissions:
       actions: write
       contents: read
@@ -158,11 +159,29 @@ jobs:
           export LLVM=1 LLVM_IAS=1 ARCH=arm64 SUBARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CC="ccache clang"
+          echo "=== 资源状态(诊断) ==="
+          free -m; df -h; nproc
+          # 免费 runner(2核/7GB) 跑不动 GKI ThinLTO 链接(LTO vmlinux.o 内存峰值>7GB -> OOM 被杀，
+          # 5.15.41 与 5.15.167 在线构建均已证实)。关闭 LTO 用普通链接：功能无感
+          # (SUSFS/KSU/eBPF 不受影响，模块 vermagic 基于 UTS_RELEASE 不变)，链接内存降到 ~1-2GB。
+          echo "=== 关闭 ThinLTO (CONFIG_LTO_NONE) ==="
+          ./scripts/config --file out/.config -d LTO_CLANG_THIN -e LTO_NONE
+          make O=out LLVM=1 ARCH=arm64 olddefconfig
+          grep -E '^CONFIG_LTO(NONE|_CLANG_THIN)=' out/.config || true
           # 去除 -dirty 后缀(编译期 merge 会改动检入的 defconfig 导致 git 树变脏；
           # 5.15.167 由 .scmversion 固定版本串，此 sed 对其无影响)
           sed -i 's/ -dirty//g' scripts/setlocalversion
           sed -i '$i res=$(echo "$res" | sed '\''s/-dirty//g'\'')' scripts/setlocalversion
-          make -j$(nproc) O=out LLVM=1 ARCH=arm64 CC="$CC" LD=ld.lld OBJCOPY=llvm-objcopy Image
+          echo "=== 编译内核(输出重定向 build.log, 仅失败时显示尾部) ==="
+          set +e
+          make -j$(nproc) O=out LLVM=1 ARCH=arm64 CC="$CC" LD=ld.lld OBJCOPY=llvm-objcopy Image > build.log 2>&1
+          rc=$?
+          set -e
+          if [ $rc -ne 0 ]; then
+            echo "=== 编译失败 (exit $rc)，build.log 尾部: ==="
+            tail -80 build.log
+            exit $rc
+          fi
           echo "=== 编译产物 ==="
           ls -lh out/arch/arm64/boot/Image
           echo "=== 版本串校验(5.15.167 必须精确匹配固件完整版本串) ==="
