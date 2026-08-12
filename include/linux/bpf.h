@@ -25,6 +25,8 @@
 #include <linux/bpfptr.h>
 #include <linux/android_kabi.h>
 
+typedef int (*bpf_callback_t)(u64, u64, u64, u64, u64);
+
 struct bpf_verifier_env;
 struct bpf_verifier_log;
 struct perf_event;
@@ -2179,6 +2181,7 @@ extern const struct bpf_func_proto bpf_for_each_map_elem_proto;
 extern const struct bpf_func_proto bpf_btf_find_by_name_kind_proto;
 extern const struct bpf_func_proto bpf_sk_setsockopt_proto;
 extern const struct bpf_func_proto bpf_sk_getsockopt_proto;
+extern const struct bpf_func_proto bpf_loop_proto;
 
 const struct bpf_func_proto *tracing_prog_func_proto(
   enum bpf_func_id func_id, const struct bpf_prog *prog);
