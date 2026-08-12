@@ -200,11 +200,12 @@ ls -lh AnyKernel3-NX729J-*.zip
 
 ### 9. 刷机
 
+> 我们默认你已经拥有一定的刷机基础能力，和基本的救砖知识，所以这一部分的文档并不会写得很详细。
+
 任选其一：
 
-- **内核管理器**：下载 ReSukiSU 管理器（[ReSukiSU_CI](https://github.com/cctv18/ReSukiSU_CI/releases)），在其中选择本 zip 刷入（会提示备份 boot，建议先备份）。
+- **内核管理器**：使用支持 AnyKernel3 刷机包的内核管理器刷入本 zip（刷入前建议先备份 boot）。
 - **TWRP / 卡刷**：重启到 TWRP → 安装本 zip → 重启。
-- **fastboot**（仅当已解锁 bootloader）：`adb reboot bootloader` → `fastboot flash boot <Image>` → `fastboot reboot`。
 
 > ⚠️ 刷写前务必备份 `boot` 分区；如遇无法开机，回刷官方 `boot.img`。
 
