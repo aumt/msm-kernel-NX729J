@@ -64,7 +64,7 @@ jobs:
           ref: ${{ steps.ver.outputs.BRANCH }}
           fetch-depth: 0
 
-      - name: 版本串对齐 (5.15.167: .scmversion 覆盖 = 手机固件完整版本串)
+      - name: "版本串对齐 (5.15.167: .scmversion 覆盖 = 手机固件完整版本串)"
         if: ${{ steps.ver.outputs.SCM_VER != '' }}
         run: |
           echo "${{ steps.ver.outputs.SCM_VER }}" > .scmversion
