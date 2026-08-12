@@ -527,6 +527,18 @@ config TCP_CONG_HTCP
 	  based on network conditions and in a way so as to be fair with
 	  other Reno and H-TCP flows.
 
+config TCP_CONG_BRUTAL
+	tristate "Brutal TCP"
+	depends on INET
+	default y
+	help
+	  Brutal TCP is a congestion control algorithm for high loss-rate
+	  environments (e.g. cellular networks). It actively probes bandwidth
+	  and aggressively fills the congestion window, with no upper bound.
+	  It requires applications to set per-connection bandwidth parameters
+	  via the TCP_BRUTAL_PARAMS sockopt, so it is NOT suitable as the
+	  default congestion control.
+
 config TCP_CONG_HSTCP
 	tristate "High Speed TCP"
 	default n
