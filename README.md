@@ -1,150 +1,237 @@
-# How do I submit patches to Android Common Kernels
+# 红魔 8S Pro (NX729J) 通用内核
 
-1. BEST: Make all of your changes to upstream Linux. If appropriate, backport to the stable releases.
-   These patches will be merged automatically in the corresponding common kernels. If the patch is already
-   in upstream Linux, post a backport of the patch that conforms to the patch requirements below.
-   - Do not send patches upstream that contain only symbol exports. To be considered for upstream Linux,
-additions of `EXPORT_SYMBOL_GPL()` require an in-tree modular driver that uses the symbol -- so include
-the new driver or changes to an existing driver in the same patchset as the export.
-   - When sending patches upstream, the commit message must contain a clear case for why the patch
-is needed and beneficial to the community. Enabling out-of-tree drivers or functionality is not
-not a persuasive case.
+> 红魔 8S Pro / 8S Pro+ (NX729S / NX729J, **SM8550 / kalama**, **GKI 2.0**) 自定义内核，基于 Qualcomm `kernel.lnx.5.15.c5` 基底 + nubia 厂商层重建，内核版本串与手机固件**严格对齐**（`vendor_dlkm` vermagic 匹配，可正常加载原厂内核模块）。集成 **KernelSU (ReSukiSU 分支)** 与 SUSFS 等特性，支持 GitHub Actions 云编译与 Linux 服务器本地编译两种方式。
 
-2. LESS GOOD: Develop your patches out-of-tree (from an upstream Linux point-of-view). Unless these are
-   fixing an Android-specific bug, these are very unlikely to be accepted unless they have been
-   coordinated with kernel-team@android.com. If you want to proceed, post a patch that conforms to the
-   patch requirements below.
+---
 
-# Common Kernel patch requirements
+## 项目介绍
 
-- All patches must conform to the Linux kernel coding standards and pass `scripts/checkpatch.pl`
-- Patches shall not break gki_defconfig or allmodconfig builds for arm, arm64, x86, x86_64 architectures
-(see  https://source.android.com/setup/build/building-kernels)
-- If the patch is not merged from an upstream branch, the subject must be tagged with the type of patch:
-`UPSTREAM:`, `BACKPORT:`, `FROMGIT:`, `FROMLIST:`, or `ANDROID:`.
-- All patches must have a `Change-Id:` tag (see https://gerrit-review.googlesource.com/Documentation/user-changeid.html)
-- If an Android bug has been assigned, there must be a `Bug:` tag.
-- All patches must have a `Signed-off-by:` tag by the author and the submitter
+- **内核版本**：`5.15.x`（GKI 2.0，`BOOT_IMAGE_HEADER_V3` / AK3 `split_boot` 刷入）
+- **分支说明**：
 
-Additional requirements are listed below based on patch type
+  | 分支 | 内核版本 | 基底 | 说明 |
+  |------|----------|------|------|
+  | `main` | 5.15.41 | nubia 官方 5.15.41 树 | 官方树，版本串由 git hash 生成 |
+  | `nx729j-5.15.167` | 5.15.167 | Qualcomm `kernel.lnx.5.15.c5` 重建树 | 用 `.scmversion` 对齐手机固件完整版本串，`vendor_dlkm` 模块可正常加载 |
 
-## Requirements for backports from mainline Linux: `UPSTREAM:`, `BACKPORT:`
+- **版本串对齐机制**：`UTS_RELEASE = 内核版本号 + CONFIG_LOCALVERSION + .scmversion`。5.15.167 树将手机固件的完整版本串（如 `5.15.167-android13-8-00017-gb1f32b310a30-ab12826353`）写入 `.scmversion`，编译出的内核版本号与手机原厂内核完全一致。
+- **编译工具链**：AOSP LLVM/Clang（云端 `clang-r450784d`，android13 时代 clang-14），`LLVM=1` 全 LLVM 链接，配合 ccache 加速。
 
-- If the patch is a cherry-pick from Linux mainline with no changes at all
-    - tag the patch subject with `UPSTREAM:`.
-    - add upstream commit information with a `(cherry picked from commit ...)` line
-    - Example:
-        - if the upstream commit message is
-```
-        important patch from upstream
+---
 
-        This is the detailed description of the important patch
+## 功能特性（workflow 开关）
 
-        Signed-off-by: Fred Jones <fred.jones@foo.org>
-```
->- then Joe Smith would upload the patch for the common kernel as
-```
-        UPSTREAM: important patch from upstream
+以下功能通过 workflow `workflow_dispatch` 输入开关控制（默认全部开启），关闭后从 `.config` 移除对应内核符号：
 
-        This is the detailed description of the important patch
+| 功能 | 开关 input | 默认 | 内核配置 |
+|------|-----------|------|----------|
+| SUSFS（内核级隐藏 root） | `enable_susfs` | ✅ 开 | `CONFIG_KSU_SUSFS` |
+| ZRAM LZ4 压缩算法 | `enable_lz4` | ✅ 开 | `CONFIG_ZRAM_DEF_COMP_LZ4` |
+| 网络功能增强（ipset + IPv6 NAT，OpenClash 等依赖） | `enable_network` | ✅ 开 | `CONFIG_IP_SET` / `CONFIG_IP6_NF_NAT` |
+| BBR / Brutal 等拥塞控制算法 | `enable_bbbrutal` | ✅ 开 | `CONFIG_TCP_CONG_BBR` / `CONFIG_TCP_CONG_BRUTAL` |
+| Droidspaces 容器支持（SYSVIPC / 命名空间） | `enable_droidspaces` | ✅ 开 | `CONFIG_SYSVIPC` / `CONFIG_POSIX_MQUEUE` / `CONFIG_IPC_NS` / `CONFIG_USER_NS` |
+| 内核级基带保护（防格机） | `enable_bbg` | ✅ 开 | `CONFIG_BBG` + LSM `baseband_guard` |
+| eBPF 支持（BPF/JIT/BTF/IKHEADERS，**daed 必需**） | `enable_ebpf` | ✅ 开 | `CONFIG_BPF_SYSCALL` / `CONFIG_BPF_JIT` / `CONFIG_DEBUG_INFO_BTF` / `CONFIG_IKHEADERS` |
 
-        Signed-off-by: Fred Jones <fred.jones@foo.org>
+> ⚠️ **关闭某些开关有副作用面**（如 `enable_ebpf` 关掉后 daed 无法运行，`enable_droidspaces` 影响容器应用），默认均开启，如非必要请保持默认。
 
-        Bug: 135791357
-        Change-Id: I4caaaa566ea080fa148c5e768bb1a0b6f7201c01
-        (cherry picked from commit c31e73121f4c1ec41143423ac6ce3ce6dafdcec1)
-        Signed-off-by: Joe Smith <joe.smith@foo.org>
-```
+**固定不集成**（未提供开关）：KPM / LZ4KD / ADIOS / Re-Kernel 等。**Always-on**：KernelSU（ReSukiSU 分支，内核级 root，不受开关控制）。
 
-- If the patch requires any changes from the upstream version, tag the patch with `BACKPORT:`
-instead of `UPSTREAM:`.
-    - use the same tags as `UPSTREAM:`
-    - add comments about the changes under the `(cherry picked from commit ...)` line
-    - Example:
-```
-        BACKPORT: important patch from upstream
+---
 
-        This is the detailed description of the important patch
+## ⚠️ 刷机风险警告
 
-        Signed-off-by: Fred Jones <fred.jones@foo.org>
+- 刷写内核**有风险**，可能导致无法开机、WIFI/指纹/基带异常等。
+- 刷写前务必备份 `boot` 分区（TWRP 或 Android 工具箱）。
+- 刷入后如遇问题，请回刷官方 `boot.img`。
+- 首次使用内核级 root（KernelSU/SUSFS）请安装对应管理器：**ReSukiSU 管理器** 见 [ReSukiSU_CI](https://github.com/cctv18/ReSukiSU_CI/releases)。
 
-        Bug: 135791357
-        Change-Id: I4caaaa566ea080fa148c5e768bb1a0b6f7201c01
-        (cherry picked from commit c31e73121f4c1ec41143423ac6ce3ce6dafdcec1)
-        [joe: Resolved minor conflict in drivers/foo/bar.c ]
-        Signed-off-by: Joe Smith <joe.smith@foo.org>
-```
+---
 
-## Requirements for other backports: `FROMGIT:`, `FROMLIST:`,
+## 构建方式一：GitHub Actions（推荐）
 
-- If the patch has been merged into an upstream maintainer tree, but has not yet
-been merged into Linux mainline
-    - tag the patch subject with `FROMGIT:`
-    - add info on where the patch came from as `(cherry picked from commit <sha1> <repo> <branch>)`. This
-must be a stable maintainer branch (not rebased, so don't use `linux-next` for example).
-    - if changes were required, use `BACKPORT: FROMGIT:`
-    - Example:
-        - if the commit message in the maintainer tree is
-```
-        important patch from upstream
+无需本地环境，在 GitHub 云端完成全部编译、打包、发布。
 
-        This is the detailed description of the important patch
+1. **Fork 本仓库** → 点击右上角 **Fork**。
+2. 进入你的仓库 → **Actions** → 左侧选择 **Build NX729J GKI (Red Magic 8S Pro)** → **Run workflow**。
+3. **填写参数**：
 
-        Signed-off-by: Fred Jones <fred.jones@foo.org>
-```
->- then Joe Smith would upload the patch for the common kernel as
-```
-        FROMGIT: important patch from upstream
+   | 参数 | 说明 |
+   |------|------|
+   | `kernel_version` | `5.15.167`（推荐，c5 重建树）或 `5.15.41`（官方树） |
+   | `ccache_update` | 源码/配置变更后开启，强制重建缓存（一般保持关闭） |
+   | `package_ak3` | 打包 AnyKernel3 刷机包（默认开启） |
+   | `custom_version` | **自定义完整版本串**，留空用默认。**获取方法见文末附录**。系统 OTA 更新后固件版本串变化但内核版本号（如 5.15.167）没变时，用它对齐 `vendor_dlkm`。 |
+   | `enable_susfs` / `enable_lz4` / `enable_network` / `enable_bbbrutal` / `enable_droidspaces` / `enable_bbg` / `enable_ebpf` | 各功能开关，见上方特性表 |
+   | `create_release` | 构建成功后自动创建 GitHub Release（默认开启） |
 
-        This is the detailed description of the important patch
+4. **等待构建**（约 40–60 分钟，二次构建因 ccache 缓存约 15–30 分钟）。
+5. 构建成功后：
+   - 若 `create_release` 开启 → 在 **Releases** 页下载 `AnyKernel3-NX729J-<完整版本串>-ReSukiSU.zip` 刷机包；
+   - 或到本次运行 **Summary** 页的 **Artifacts** 下载 `Image` / `compiled.config` / 刷机包。
+6. **刷机**：见下方「刷机」小节。
 
-        Signed-off-by: Fred Jones <fred.jones@foo.org>
+---
 
-        Bug: 135791357
-        (cherry picked from commit 878a2fd9de10b03d11d2f622250285c7e63deace
-         https://git.kernel.org/pub/scm/linux/kernel/git/foo/bar.git test-branch)
-        Change-Id: I4caaaa566ea080fa148c5e768bb1a0b6f7201c01
-        Signed-off-by: Joe Smith <joe.smith@foo.org>
+## 构建方式二：Linux 服务器本地编译（详细教程）
+
+以下为在任意 x86_64 Linux 服务器 / 桌面上完整复现云编译的步骤（含打包 AnyKernel3）。
+
+### 1. 环境要求
+
+- **系统**：Debian / Ubuntu 系（其他发行版自行替换包名）
+- **内存**：建议 **≥ 8 GB**。若 < 8 GB，**必须关闭 LTO**（见步骤 6），否则链接阶段会 OOM
+- **磁盘**：≥ 30 GB 可用
+- **依赖**：
+
+  ```bash
+  sudo apt-get update
+  sudo apt-get install -y binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu \
+    binutils python-is-python3 libssl-dev libelf-dev libdw-dev bc dwarves \
+    ccache zip unzip git curl
+  ```
+
+### 2. 克隆源码 + 切分支
+
+```bash
+git clone https://github.com/aumt/msm-kernel.git msm-kernel
+cd msm-kernel
+git checkout nx729j-5.15.167        # 5.15.167 c5 重建树（推荐）
+# 或 git checkout main             # 5.15.41 官方树
 ```
 
+### 3. 准备 clang（二选一）
 
-- If the patch has been submitted to LKML, but not accepted into any maintainer tree
-    - tag the patch subject with `FROMLIST:`
-    - add a `Link:` tag with a link to the submittal on lore.kernel.org
-    - add a `Bug:` tag with the Android bug (required for patches not accepted into
-a maintainer tree)
-    - if changes were required, use `BACKPORT: FROMLIST:`
-    - Example:
-```
-        FROMLIST: important patch from upstream
+**方式 A（推荐，与云端一致）** — AOSP clang-14：
 
-        This is the detailed description of the important patch
-
-        Signed-off-by: Fred Jones <fred.jones@foo.org>
-
-        Bug: 135791357
-        Link: https://lore.kernel.org/lkml/20190619171517.GA17557@someone.com/
-        Change-Id: I4caaaa566ea080fa148c5e768bb1a0b6f7201c01
-        Signed-off-by: Joe Smith <joe.smith@foo.org>
+```bash
+mkdir -p clang
+curl -fL "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-platform-13.0.0_r28/clang-r450784d.tar.gz" -o clang.tar.gz
+tar -xzf clang.tar.gz -C clang
+rm -f clang.tar.gz
+clang/bin/clang --version | head -n1
 ```
 
-## Requirements for Android-specific patches: `ANDROID:`
+**方式 B** — 系统 LLVM（clang-16+ 亦可编译 5.15）：
 
-- If the patch is fixing a bug to Android-specific code
-    - tag the patch subject with `ANDROID:`
-    - add a `Fixes:` tag that cites the patch with the bug
-    - Example:
-```
-        ANDROID: fix android-specific bug in foobar.c
-
-        This is the detailed description of the important fix
-
-        Fixes: 1234abcd2468 ("foobar: add cool feature")
-        Change-Id: I4caaaa566ea080fa148c5e768bb1a0b6f7201c01
-        Signed-off-by: Joe Smith <joe.smith@foo.org>
+```bash
+sudo apt-get install -y clang lld llvm
 ```
 
-- If the patch is a new feature
-    - tag the patch subject with `ANDROID:`
-    - add a `Bug:` tag with the Android bug (required for android-specific features)
+### 4. 合并 defconfig（三合一）
 
+与 `build.config.msm.common` 同参数的 `merge_config.sh`，把 GKI 基础 + 厂商 kalama 片段 + NX729J 差分配置合并为完整 defconfig：
+
+```bash
+KCONFIG_CONFIG=arch/arm64/configs/vendor/kalama-NX729J-gki_defconfig \
+  bash scripts/kconfig/merge_config.sh -m -r -y \
+  arch/arm64/configs/gki_defconfig \
+  arch/arm64/configs/vendor/kalama_le_GKI.config \
+  arch/arm64/configs/vendor/NX729J-perf_diff.config
+```
+
+> `main`（5.15.41）分支将 `kalama_le_GKI.config` 换成 `kalama_GKI.config`。
+
+### 5. 版本串对齐（仅 5.15.167 需要）
+
+把手机固件的完整版本串**去内核版本号前缀后的部分**写入 `.scmversion`（`.scmversion` 只含后缀，否则版本串会重复拼接）：
+
+```bash
+# 完整版本串获取方法见文末附录；示例：
+echo "-android13-8-00017-gb1f32b310a30-ab12826353" > .scmversion
+cat .scmversion
+```
+
+### 6. 生成 .config + 编译 Image
+
+```bash
+export PATH="$PWD/clang/bin:$PATH"       # 方式 A 需要；方式 B（系统 clang）可省略
+export LLVM=1 LLVM_IAS=1 ARCH=arm64 SUBARCH=arm64
+export CROSS_COMPILE=aarch64-linux-gnu-
+export CC="ccache clang"
+
+# 生成 .config（步骤 4 的合并产物）
+make -j$(nproc) O=out LLVM=1 ARCH=arm64 CC="$CC" LD=ld.lld OBJCOPY=llvm-objcopy vendor/kalama-NX729J-gki_defconfig
+
+# 内存 < 8 GB 时：关闭 LTO（gki_defconfig 默认 LTO_CLANG_FULL，链接内存峰值 > 7 GB 会 OOM）
+# 功能无影响（SUSFS/KSU/eBPF 不依赖 LTO，模块 vermagic 基于 UTS_RELEASE）
+./scripts/config --file out/.config -d LTO_CLANG_THIN -d LTO_CLANG_FULL -e LTO_NONE
+make O=out LLVM=1 ARCH=arm64 olddefconfig
+grep -E '^CONFIG_LTO(NONE|_CLANG)' out/.config   # 确认 LTO_NONE=y 且无 LTO_CLANG
+
+# 编译内核（约 40–60 分钟）
+make -j$(nproc) O=out LLVM=1 ARCH=arm64 CC="$CC" LD=ld.lld OBJCOPY=llvm-objcopy Image
+```
+
+> 如需自定义功能开关，参照上方「功能特性」表，在 `make olddefconfig` 之后用 `./scripts/config --file out/.config -d <符号>` 关闭对应符号并再次 `make olddefconfig`。
+
+### 7. 校验产物
+
+```bash
+ls -lh out/arch/arm64/boot/Image
+
+# 校验版本串是否与固件完整版本串精确匹配（5.15.167）
+strings -a out/arch/arm64/boot/Image | grep -oE "5.15.167-android13-8-00017-gb1f32b310a30-ab12826353" | sort -u
+```
+
+### 8. 打包 AnyKernel3 刷机包
+
+GKI 2.0 的 `boot` 分区只含内核（ramdisk 在 `init_boot`），因此 AnyKernel3 使用 `split_boot` / `flash_boot` 跳过 ramdisk 解包/重打包，只替换内核：
+
+```bash
+git clone --depth=1 https://github.com/osm0sis/AnyKernel3 anykernel3
+rm -rf anykernel3/.git
+cd anykernel3
+cp ../out/arch/arm64/boot/Image ./Image
+
+# 修改 anykernel.sh：机型 / 跳过设备校验 / GKI 2.0 只刷内核
+sed -i 's|kernel.string=.*|kernel.string=RedMagic8SPro-GKI|' anykernel.sh
+sed -i 's|do.devicecheck=.*|do.devicecheck=0|' anykernel.sh
+sed -i 's|supported.manufacturers=.*|supported.manufacturers=|' anykernel.sh
+sed -i 's|^BLOCK=.*|BLOCK=boot;|' anykernel.sh
+sed -i 's|^dump_boot;|split_boot; # GKI 2.0: ramdisk 在 init_boot, boot 仅内核|' anykernel.sh
+sed -i 's|^write_boot;|flash_boot; # 仅替换内核, 跳过 ramdisk 重打包|' anykernel.sh
+
+# 打包（文件名包含完整版本串，便于识别）
+zip -r9 "../AnyKernel3-NX729J-5.15.167-android13-8-00017-gb1f32b310a30-ab12826353-ReSukiSU.zip" ./* -x '*.git*'
+cd ..
+ls -lh AnyKernel3-NX729J-*.zip
+```
+
+### 9. 刷机
+
+任选其一：
+
+- **内核管理器**：下载 ReSukiSU 管理器（[ReSukiSU_CI](https://github.com/cctv18/ReSukiSU_CI/releases)），在其中选择本 zip 刷入（会提示备份 boot，建议先备份）。
+- **TWRP / 卡刷**：重启到 TWRP → 安装本 zip → 重启。
+- **fastboot**（仅当已解锁 bootloader）：`adb reboot bootloader` → `fastboot flash boot <Image>` → `fastboot reboot`。
+
+> ⚠️ 刷写前务必备份 `boot` 分区；如遇无法开机，回刷官方 `boot.img`。
+
+---
+
+## 附录：获取固件完整版本串
+
+`custom_version`（云端）或 `.scmversion`（本地）需要手机固件的**完整版本串**。获取方式：
+
+1. **从手机获取（最准确）**：
+   ```bash
+   adb shell cat /proc/version
+   ```
+   输出类似：
+   ```
+   Linux version 5.15.167-android13-8-00017-gb1f32b310a30-ab12826353 (clang ...)
+   ```
+   取包含 `Linux version` 那一行的**第一个空格段**，即 `5.15.167-android13-8-00017-gb1f32b310a30-ab12826353`。
+
+2. **从已发布的 Release 获取**：直接复制本仓库 Releases 页中最新版「内核版本号」。
+
+**用途**：手机系统 OTA 更新后，固件的完整版本串会变化（如 `...-00017-...` → `...-00020-...`），但内核版本号（如 `5.15.167`）可能不变。此时内核模块（`vendor_dlkm`）的 vermagic 要求与新固件一致，若用旧版本串编译会导致模块加载失败。把新固件的完整版本串填入 `custom_version`（云端）或写入 `.scmversion`（本地），即可让编译出的内核版本串与新固件严格对齐。
+
+---
+
+## 目录结构（与本项目相关）
+
+- `.github/workflows/build-gki.yml` — GitHub Actions 构建工作流（编译 + 打包 + 自动发布）
+- `arch/arm64/configs/` — `gki_defconfig`、`vendor/kalama*`、`vendor/NX729J-perf_diff.config`
+- `vendor/` — nubia 厂商层 / 厂商内核模块源码
