@@ -161,13 +161,17 @@ jobs:
           export CC="ccache clang"
           echo "=== 资源状态(诊断) ==="
           free -m; df -h; nproc
-          # 免费 runner(2核/7GB) 跑不动 GKI ThinLTO 链接(LTO vmlinux.o 内存峰值>7GB -> OOM 被杀，
-          # 5.15.41 与 5.15.167 在线构建均已证实)。关闭 LTO 用普通链接：功能无感
-          # (SUSFS/KSU/eBPF 不受影响，模块 vermagic 基于 UTS_RELEASE 不变)，链接内存降到 ~1-2GB。
-          echo "=== 关闭 ThinLTO (CONFIG_LTO_NONE) ==="
-          ./scripts/config --file out/.config -d LTO_CLANG_THIN -e LTO_NONE
+          # 免费 runner(2核/7GB) 跑不动 GKI LTO 链接(gki_defconfig 是 LTO_CLANG_FULL=y，
+          # Full/Thin LTO 链接内存峰值>7GB -> systemd-oomd SIGTERM 杀，已两次证实)。
+          # 关闭 LTO 用普通链接：功能无感(SUSFS/KSU/eBPF 不受影响，模块 vermagic 基于
+          # UTS_RELEASE 不变)，链接内存降到 ~1-2GB。
+          echo "=== 关闭 LTO (gki_defconfig LTO_CLANG_FULL -> LTO_NONE) ==="
+          ./scripts/config --file out/.config -d LTO_CLANG_THIN -d LTO_CLANG_FULL -e LTO_NONE
           make O=out LLVM=1 ARCH=arm64 olddefconfig
-          grep -E '^CONFIG_LTO(NONE|_CLANG_THIN)=' out/.config || true
+          echo "=== LTO 状态校验(必须 LTO_NONE=y 且无 LTO_CLANG_*) ==="
+          grep -nE '^#? *CONFIG_LTO' out/.config || echo "(无 CONFIG_LTO 行)"
+          grep '^CONFIG_LTO_NONE=y' out/.config || { echo "!! LTO_NONE 未生效"; exit 1; }
+          if grep -q '^CONFIG_LTO_CLANG' out/.config; then echo "!! LTO_CLANG 仍启用"; exit 1; fi
           # 去除 -dirty 后缀(编译期 merge 会改动检入的 defconfig 导致 git 树变脏；
           # 5.15.167 由 .scmversion 固定版本串，此 sed 对其无影响)
           sed -i 's/ -dirty//g' scripts/setlocalversion
