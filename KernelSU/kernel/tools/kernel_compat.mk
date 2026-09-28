@@ -293,3 +293,22 @@ ifneq ($(shell grep -q "sym_name" $(srctree)/security/selinux/ss/policydb.h; ech
 $(info -- $(REPO_NAME)/compat: sym_name not found)
 ccflags-y += -DKSU_COMPAT_SYM_NAME_NOT_FOUND
 endif
+
+# for kernel version below 3.8, include/uapi/linux/module.h maybe not found
+# https://github.com/torvalds/linux/commit/2f3238aebedb243804f58d62d57244edec4149b2
+ifneq ($(wildcard $(srctree)/uapi/include/linux/module.h),)
+$(info -- $(REPO_NAME)/compat: module.h found)
+ccflags-y += -DKSU_COMPAT_HAS_UAPI_MODULE_H
+endif
+
+# optional hook
+ifneq ($(shell grep -q "ksu_handle_post_execve" $(srctree)/fs/exec.c; echo $$?),0)
+$(info -- $(REPO_NAME)/compat: ksu_handle_post_execve hook not found)
+ccflags-y += -DKSU_COMPAT_NO_POST_EXECVE_HOOK
+endif
+
+# https://github.com/torvalds/linux/commit/a721f7b8c3548e943e514a957f2a37f4763b9888
+ifeq ($(shell grep -q -F "void security_bprm_committed_creds(const struct linux_binprm *bprm)" $(srctree)/security/security.c; echo $$?),0)
+$(info -- $(REPO_NAME)/compat constify bprm parameter in security_bprm_committed_creds found)
+ccflags-y += -DKSU_COMPAT_CONSTIFY_BPRM_PARAMETER_IN_SECURITY_BPRM_COMMITTED_CREDS
+endif
