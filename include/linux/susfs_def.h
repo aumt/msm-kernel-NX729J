@@ -57,6 +57,11 @@
  */
  // thread_info->flags is unsigned long :D
 #define TIF_PROC_UMOUNTED 33
+/* 以下两位与上游 susfs4ksu 对齐（其 susfs_def.h 同为 33/34/35），
+ * 供新版 KernelSU(4437) 的 CONFIG_KSU_SUSFS 集成使用。
+ * 注意 TIF_PROC_NO_SU 与 TIF_PROC_UMOUNTED 是**两个不同的 flag**，不可互相别名。 */
+#define TIF_PROC_NO_SU 34
+#define TIF_PROC_UMOUNTED_FOR_ZYGOTE_NEXT 35
 
 #define AS_FLAGS_SUS_PATH 33
 #define AS_FLAGS_SUS_MOUNT 34
@@ -99,6 +104,35 @@ static inline bool susfs_is_current_proc_umounted(void) {
 
 static inline void susfs_set_current_proc_umounted(void) {
 	set_thread_flag(TIF_PROC_UMOUNTED);
+}
+
+static inline void susfs_clear_current_proc_umounted(void) {
+	clear_thread_flag(TIF_PROC_UMOUNTED);
+}
+
+/* ---- 上游同名接口：新版 KernelSU 的 sucompat.h 直接引用这些名字 ---- */
+static inline bool susfs_is_current_proc_no_su(void) {
+	return (likely(test_thread_flag(TIF_PROC_NO_SU)));
+}
+
+static inline void susfs_set_current_proc_no_su(void) {
+	set_thread_flag(TIF_PROC_NO_SU);
+}
+
+static inline void susfs_clear_current_proc_no_su(void) {
+	clear_thread_flag(TIF_PROC_NO_SU);
+}
+
+static inline bool susfs_is_current_proc_umounted_for_zygote_next(void) {
+	return (likely(test_thread_flag(TIF_PROC_UMOUNTED_FOR_ZYGOTE_NEXT)));
+}
+
+static inline void susfs_set_current_proc_umounted_for_zygote_next(void) {
+	set_thread_flag(TIF_PROC_UMOUNTED_FOR_ZYGOTE_NEXT);
+}
+
+static inline void susfs_clear_current_proc_umounted_for_zygote_next(void) {
+	clear_thread_flag(TIF_PROC_UMOUNTED_FOR_ZYGOTE_NEXT);
 }
 
 static inline bool susfs_is_current_proc_umounted_app(void) {
