@@ -5193,8 +5193,9 @@ int vfs_readlink(struct dentry *dentry, char __user *buffer, int buflen)
 			}
 			return inode->i_op->readlink(dentry, buffer, buflen);
 		}
-#endif // #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
+#else
 			return inode->i_op->readlink(dentry, buffer, buflen);
+#endif // #ifdef CONFIG_KSU_SUSFS_OPEN_REDIRECT
 
 		if (!d_is_symlink(dentry))
 			return -EINVAL;
