@@ -1254,8 +1254,6 @@ static struct mount *clone_mnt(struct mount *old, struct dentry *root,
 #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
 bypass_orig_flow:
 #endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT
-
-	mnt = alloc_vfsmnt(old->mnt_devname);
 	if (!mnt)
 		return ERR_PTR(-ENOMEM);
 
