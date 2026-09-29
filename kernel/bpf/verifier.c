@@ -520,7 +520,8 @@ static bool is_ptr_cast_function(enum bpf_func_id func_id)
 static bool is_callback_calling_function(enum bpf_func_id func_id)
 {
 	return func_id == BPF_FUNC_for_each_map_elem ||
-	       func_id == BPF_FUNC_timer_set_callback;
+	       func_id == BPF_FUNC_timer_set_callback ||
+	       func_id == BPF_FUNC_loop;
 }
 
 static bool is_cmpxchg_insn(const struct bpf_insn *insn)

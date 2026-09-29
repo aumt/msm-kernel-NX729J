@@ -1093,8 +1093,8 @@ static enum hrtimer_restart bpf_timer_cb(struct hrtimer *hrtimer)
 		key = value - round_up(map->key_size, 8);
 	}
 
-	BPF_CAST_CALL(callback_fn)((u64)(long)map, (u64)(long)key,
-				   (u64)(long)value, 0, 0);
+	bpf_call_callback(callback_fn, (u64)(long)map, (u64)(long)key,
+			  (u64)(long)value, 0, 0);
 	/* The verifier checked that return value is zero. */
 
 	this_cpu_write(hrtimer_running, NULL);

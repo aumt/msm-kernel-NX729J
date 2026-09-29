@@ -721,7 +721,6 @@ const struct bpf_func_proto bpf_for_each_map_elem_proto = {
 BPF_CALL_4(bpf_loop, u32, nr_loops, void *, callback_fn, void *, callback_ctx,
 	   u64, flags)
 {
-	bpf_callback_t callback = (bpf_callback_t)callback_fn;
 	u64 ret;
 	u32 i;
 
@@ -731,7 +730,8 @@ BPF_CALL_4(bpf_loop, u32, nr_loops, void *, callback_fn, void *, callback_ctx,
 		return -E2BIG;
 
 	for (i = 0; i < nr_loops; i++) {
-		ret = callback((u64)i, (u64)(long)callback_ctx, 0, 0, 0);
+		ret = bpf_call_callback(callback_fn, (u64)i,
+					(u64)(long)callback_ctx, 0, 0, 0);
 		/* return value: 0 - continue, 1 - stop and return */
 		if (ret)
 			return i + 1;
