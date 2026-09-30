@@ -343,6 +343,34 @@ jobs:
           grep -E '^CONFIG_(KSU_SUSFS|ZRAM_DEF_COMP|ZRAM_DEF_COMP_LZ4|IP_SET|IP6_NF_NAT|TCP_CONG_BBR|TCP_CONG_BRUTAL|SYSVIPC|POSIX_MQUEUE|IPC_NS|USER_NS|BBG|BPF_SYSCALL|BPF_JIT|BPF_JIT_ALWAYS_ON|DEBUG_INFO_BTF|IKHEADERS)=' out/.config || true
           grep -E '^CONFIG_LSM=' out/.config || true
 
+      - name: 准备 swap (FullLTO 链接内存峰值兜底)
+        run: |
+          set -e
+          echo "=== swap 前 ==="; free -m; df -h /
+          avail=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+          echo "根分区可用: ${avail}G"
+          # FullLTO + CFI + DWARF 的 vmlinux 链接是单进程内存大户；仅靠 16G 物理内存会
+          # 被外部 SIGTERM 掐掉（exit 143），所以补一块 swap 兜底。按剩余磁盘决定大小。
+          SIZE=""
+          if   [ "${avail:-0}" -ge 40 ]; then SIZE=16G
+          elif [ "${avail:-0}" -ge 24 ]; then SIZE=8G
+          fi
+          if [ -z "$SIZE" ]; then
+            echo "!! 磁盘不足 24G，跳过 swap（内存峰值风险自负）"; free -m; exit 0
+          fi
+          echo "选定 swap 大小: $SIZE"
+          if swapon --show=NAME --noheadings 2>/dev/null | grep -q '/swapfile'; then
+            echo "已存在 /swapfile swap，跳过创建"
+          else
+            sudo rm -f /swapfile
+            sudo fallocate -l "$SIZE" /swapfile || \
+              sudo dd if=/dev/zero of=/swapfile bs=1M count=$(( ${SIZE%G} * 1024 )) status=none
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+          fi
+          echo "=== swap 后 ==="; free -m; swapon --show
+
       - name: 编译内核 Image
         run: |
           set -e
@@ -352,6 +380,15 @@ jobs:
           export CC="ccache clang"
           echo "=== 资源状态(诊断) ==="
           free -m; df -h; nproc
+          # 后台记录内存曲线：本步骤若被外部 SIGTERM 杀死(exit 143)，下面的 failure 分支
+          # 根本不会执行，build.log 也不会被打印 —— 只能靠 mem.log 事后判断是不是内存打爆
+          ( while true; do
+              printf '%s ' "$(date -u +%H:%M:%S)"
+              free -m | awk '/^Mem:/{printf "mem_used=%s mem_avail=%s ", $3, $7} /^Swap:/{printf "swap_used=%s swap_free=%s", $3, $4}'
+              echo
+              sleep 10
+            done ) > mem.log 2>&1 &
+          MEMLOG_PID=$!
           # 去除 -dirty 后缀(编译期 merge 会改动检入的 defconfig 导致 git 树变脏；
           # 5.15.167 由 .scmversion 固定版本串，此 sed 对其无影响)
           sed -i 's/ -dirty//g' scripts/setlocalversion
@@ -364,14 +401,31 @@ jobs:
           if [ $rc -ne 0 ]; then
             echo "=== 编译失败 (exit $rc)，build.log 尾部: ==="
             tail -80 build.log
+            echo "=== 失败前内存曲线尾部 ==="
+            tail -15 mem.log || true
             exit $rc
           fi
+          kill "$MEMLOG_PID" 2>/dev/null || true
+          echo "=== 编译期间内存曲线尾部 ==="
+          tail -8 mem.log || true
           echo "=== 编译产物 ==="
           ls -lh out/arch/arm64/boot/Image
           echo "=== 版本串校验(5.15.167 必须精确匹配固件完整版本串) ==="
           strings -a out/arch/arm64/boot/Image | grep -oE "${{ steps.ver.outputs.VERSION_FULL }}" | sort -u
           cp out/.config ./compiled.config
           echo "ccache 状态:"; ccache -s
+
+      - name: 上传诊断日志 (无论成败)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diag-${{ steps.ver.outputs.VERSION_TAG }}-${{ github.run_id }}
+          path: |
+            build.log
+            mem.log
+            compiled.config
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: 保存 ccache 缓存
         if: inputs.ccache_update || steps.ccache-restore.outputs.cache-hit != 'true'
