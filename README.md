@@ -38,7 +38,7 @@
 
 > ⚠️ **关闭某些开关有副作用面**（如 `enable_ebpf` 关掉后 daed 无法运行，`enable_droidspaces` 影响容器应用），默认均开启，如非必要请保持默认。
 
-**固定不集成**（未提供开关）：KPM / LZ4KD / ADIOS / Re-Kernel 等。**Always-on**：KernelSU（ReSukiSU 分支，内核级 root，不受开关控制）。
+**Always-on**：KernelSU（ReSukiSU 分支，内核级 root，不受开关控制）。
 
 ---
 
