@@ -509,13 +509,62 @@ jobs:
           cd anykernel3
           cp ../out/arch/arm64/boot/Image ./Image
           if [[ ! -s ./Image ]]; then echo "未找到 Image，构建可能出错"; exit 1; fi
-          sed -i 's|kernel.string=.*|kernel.string=RedMagic8SPro-GKI|' anykernel.sh
-          sed -i 's|do.devicecheck=.*|do.devicecheck=0|' anykernel.sh
-          sed -i 's|supported.manufacturers=.*|supported.manufacturers=|' anykernel.sh
-          # GKI 2.0: boot 仅内核(ramdisk 在 init_boot) -> 用 split_boot/flash_boot 跳过 ramdisk 解包/重打包
-          sed -i 's|^BLOCK=.*|BLOCK=boot;|' anykernel.sh
-          sed -i 's|^dump_boot;|split_boot; # GKI 2.0: ramdisk 在 init_boot, boot 仅内核|' anykernel.sh
-          sed -i 's|^write_boot;|flash_boot; # 仅替换内核, 跳过 ramdisk 重打包|' anykernel.sh
+          # ★ 不再用 sed 去猜上游模板：上游 anykernel.sh 的措辞一变，sed 就静默不命中。
+          #   实例(2026-10-01)：上游模板里 IS_SLOT_DEVICE 是 0，而 ak3-core.sh 的 slot 判定是
+          #     case $IS_SLOT_DEVICE in 1|auto)   # slot detection enabled by ...
+          #   0 一个分支都不匹配 ⇒ SLOT 为空 ⇒ 找分区的循环 `for part in $name$SLOT $name`
+          #   只试 boot、永远试不到 boot_a/boot_b ⇒ 本机(A/B，by-name 下只有 boot_a/boot_b)
+          #   在 ak3-core.sh:994 处 abort "Unable to determine boot partition"。
+          #   故改成把「已在设备上刷成功过的那份」写死在这里，并对关键行加断言。
+          cat > anykernel.sh <<'AK3CONF'
+          ### AnyKernel3 Ramdisk Mod Script
+          ## osm0sis @ xda-developers
+
+          ### AnyKernel setup
+          # global properties
+          properties() { '
+          kernel.string=RedMagic8SPro-GKI
+          do.devicecheck=0
+          do.modules=0
+          do.systemless=1
+          do.cleanup=1
+          do.cleanuponabort=0
+          device.name1=
+          device.name2=
+          supported.versions=
+          supported.patchlevels=
+          supported.vendorpatchlevels=
+          '; } # end properties
+
+
+          ### AnyKernel install
+          ## boot files attributes
+          boot_attributes() {
+          set_perm_recursive 0 0 755 644 $RAMDISK/*;
+          set_perm_recursive 0 0 750 750 $RAMDISK/init* $RAMDISK/sbin;
+          } # end attributes
+
+          # boot shell variables
+          BLOCK=boot;
+          IS_SLOT_DEVICE=auto;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+
+          # import functions/variables and setup patching - see for reference (DO NOT REMOVE)
+          . tools/ak3-core.sh;
+
+          # boot install
+          split_boot; # GKI 2.0: ramdisk 在 init_boot, boot 仅内核 -> 跳过 ramdisk 解包
+          flash_boot; # 仅替换内核, 跳过 ramdisk 重打包
+          ## end boot install
+          AK3CONF
+          # 断言：这份文件被误改就直接失败，不要等刷机时才发现
+          grep -qx 'IS_SLOT_DEVICE=auto;' anykernel.sh || { echo "::error::anykernel.sh 的 IS_SLOT_DEVICE 不是 auto —— 为 0 会跳过 slot 判定，A/B 机找不到 boot_b"; exit 1; }
+          grep -q '^BLOCK=boot;' anykernel.sh || { echo "::error::anykernel.sh 的 BLOCK 不是 boot"; exit 1; }
+          grep -q '^split_boot;' anykernel.sh || { echo "::error::anykernel.sh 缺 split_boot —— GKI 2.0 的 ramdisk 在 init_boot，不该解包"; exit 1; }
+          grep -q '^flash_boot;' anykernel.sh || { echo "::error::anykernel.sh 缺 flash_boot —— 会退回到重打包 ramdisk"; exit 1; }
+          grep -q '^do.devicecheck=0' anykernel.sh || { echo "::error::anykernel.sh 的 do.devicecheck 不为 0"; exit 1; }
+          ! grep -q 'tuna' anykernel.sh || { echo "::error::anykernel.sh 里混进了上游的 tuna(Galaxy Nexus) 打补丁段"; exit 1; }
           AK3_NAME="AnyKernel3-NX729J-${{ steps.ver.outputs.VERSION_FULL }}-ReSukiSU.zip"
           zip -r9 "../$AK3_NAME" ./* -x '*.git*'
           echo "ak3name=$AK3_NAME" >> "$GITHUB_OUTPUT"
