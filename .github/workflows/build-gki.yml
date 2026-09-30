@@ -160,7 +160,14 @@ jobs:
           if [ -n "$CUSTOM" ]; then
             echo "VERSION_FULL=$CUSTOM" >> "$GITHUB_OUTPUT"
             if [[ "$CUSTOM" == "${VER_PREFIX}"* ]]; then
-              echo "SCM_VER=${CUSTOM#"$VER_PREFIX"}" >> "$GITHUB_OUTPUT"
+              SCM="${CUSTOM#"$VER_PREFIX"}"
+              # 剥完还以版本号开头 ⇒ custom_version 自己就重复拼接了，
+              # 再往下走会白编 25 分钟，这里直接掐掉
+              if [[ "$SCM" == "${VER_PREFIX}"* ]]; then
+                echo "::error::custom_version 自身重复拼接了内核版本号: $CUSTOM"
+                exit 1
+              fi
+              echo "SCM_VER=$SCM" >> "$GITHUB_OUTPUT"
             else
               echo "!!! 警告: custom_version 不以 $VER_PREFIX 开头, SCM_VER 将用完整串(内核版本号会重复拼接, 非预期)" >&2
               echo "SCM_VER=$CUSTOM" >> "$GITHUB_OUTPUT"
@@ -428,8 +435,25 @@ jobs:
           tail -8 mem.log || true
           echo "=== 编译产物 ==="
           ls -lh out/arch/arm64/boot/Image
-          echo "=== 版本串校验(5.15.167 必须精确匹配固件完整版本串) ==="
-          strings -a out/arch/arm64/boot/Image | grep -oE "${{ steps.ver.outputs.VERSION_FULL }}" | sort -u
+          echo "=== 版本串校验(必须精确匹配固件完整版本串) ==="
+          # 不能用 grep 做「子串搜索」当校验：重复拼接出来的
+          #   5.15.1675.15.167-android13-...
+          # 里照样含有 5.15.167-android13-...，子串匹配会照常命中，什么都挡不住。
+          VER_ACTUAL=$(strings -a out/arch/arm64/boot/Image | grep -m1 -aoE 'Linux version [^ ]+' | sed 's/^Linux version //')
+          echo "  实际: ${VER_ACTUAL:-（Image 里没找到 Linux version 串）}"
+          echo "  期望: ${{ steps.ver.outputs.VERSION_FULL }}"
+          KTAG="${{ steps.ver.outputs.VERSION_TAG }}"
+          N_TAG=$(printf '%s' "$VER_ACTUAL" | grep -oF "$KTAG" | wc -l)
+          if [ "$N_TAG" -ne 1 ]; then
+            echo "::error::内核版本号 $KTAG 在版本串里出现 $N_TAG 次(应为 1 次): $VER_ACTUAL"
+            echo "::error::.scmversion 只能放后缀 (UTS_RELEASE = KERNELVERSION + LOCALVERSION + .scmversion)"
+            exit 1
+          fi
+          if [ -n "${{ steps.ver.outputs.SCM_VER }}" ] && [ "$VER_ACTUAL" != "${{ steps.ver.outputs.VERSION_FULL }}" ]; then
+            echo "::error::版本串不符: 实际 '$VER_ACTUAL' ≠ 期望 '${{ steps.ver.outputs.VERSION_FULL }}'"
+            exit 1
+          fi
+          echo "  ✓ $VER_ACTUAL  (内核版本号恰好出现 1 次)"
           cp out/.config ./compiled.config
           echo "ccache 状态:"; ccache -s
 
