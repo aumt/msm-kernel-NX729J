@@ -352,16 +352,24 @@ jobs:
           # FullLTO + CFI + DWARF 的 vmlinux 链接是单进程内存大户；仅靠 16G 物理内存会
           # 被外部 SIGTERM 掐掉（exit 143），所以补一块 swap 兜底。按剩余磁盘决定大小。
           SIZE=""
-          if   [ "${avail:-0}" -ge 40 ]; then SIZE=16G
+          if   [ "${avail:-0}" -ge 60 ]; then SIZE=24G
+          elif [ "${avail:-0}" -ge 36 ]; then SIZE=16G
           elif [ "${avail:-0}" -ge 24 ]; then SIZE=8G
           fi
           if [ -z "$SIZE" ]; then
             echo "!! 磁盘不足 24G，跳过 swap（内存峰值风险自负）"; free -m; exit 0
           fi
           echo "选定 swap 大小: $SIZE"
-          if swapon --show=NAME --noheadings 2>/dev/null | grep -q '/swapfile'; then
-            echo "已存在 /swapfile swap，跳过创建"
+          # 注意：runner 镜像自带的 swap 就在 /swapfile（只有 3G），与本步骤同路径。
+          # 上一版写成「已存在 /swapfile 就跳过」，结果 16G 从未真正建立（实测日志：
+          # 选定 16G -> 已存在 -> Swap 仍是 3071MB），等于没加。这里改为按大小比对，
+          # 不够就先 swapoff 再重建。
+          CUR=$(swapon --show=NAME,SIZE --noheadings 2>/dev/null | awk '$1=="/swapfile"{print $2; exit}')
+          if [ -n "$CUR" ] && [ "${CUR%G}" -ge "${SIZE%G}" ] 2>/dev/null; then
+            echo "现有 /swapfile 已是 $CUR >= $SIZE，无需重建"
           else
+            echo "现有 /swapfile: ${CUR:-无} -> 重建为 $SIZE"
+            sudo swapoff /swapfile 2>/dev/null || true
             sudo rm -f /swapfile
             sudo fallocate -l "$SIZE" /swapfile || \
               sudo dd if=/dev/zero of=/swapfile bs=1M count=$(( ${SIZE%G} * 1024 )) status=none
@@ -369,6 +377,8 @@ jobs:
             sudo mkswap /swapfile
             sudo swapon /swapfile
           fi
+          # 让内核更早把冷页换出去，给单进程大分配让路（一次性 runner，无副作用）
+          sudo sysctl -w vm.swappiness=100 || true
           echo "=== swap 后 ==="; free -m; swapon --show
 
       - name: 编译内核 Image
@@ -389,6 +399,14 @@ jobs:
               sleep 10
             done ) > mem.log 2>&1 &
           MEMLOG_PID=$!
+          # 心跳直接打进 job 日志。实测发现：runner 被整个端掉时连 if: always() 的步骤
+          # 都会被跳过，artifact 根本传不上去；只有已经流式发出去的日志行能活下来，
+          # 所以「走到哪了 / 内存还剩多少」必须打到 stdout 上。
+          ( while true; do
+              sleep 30
+              echo "[hb $(date -u +%H:%M:%S)] $(free -m | awk '/^Mem:/{printf "mem_avail=%sM", $7} /^Swap:/{printf " swap_free=%sM", $4}') | build.log $(wc -l < build.log 2>/dev/null || echo 0) 行 | 最后: $(tail -1 build.log 2>/dev/null | cut -c1-90)"
+            done ) &
+          HB_PID=$!
           # 去除 -dirty 后缀(编译期 merge 会改动检入的 defconfig 导致 git 树变脏；
           # 5.15.167 由 .scmversion 固定版本串，此 sed 对其无影响)
           sed -i 's/ -dirty//g' scripts/setlocalversion
@@ -405,7 +423,7 @@ jobs:
             tail -15 mem.log || true
             exit $rc
           fi
-          kill "$MEMLOG_PID" 2>/dev/null || true
+          kill "$MEMLOG_PID" "$HB_PID" 2>/dev/null || true
           echo "=== 编译期间内存曲线尾部 ==="
           tail -8 mem.log || true
           echo "=== 编译产物 ==="
