@@ -3,15 +3,15 @@ name: Build NX729J GKI (Red Magic 8S Pro)
 # 红魔 8S Pro (NX729S/NX729J, SM8550/kalama, GKI 2.0)
 # 支持多内核版本构建（workflow_dispatch 选择 kernel_version）：
 #   - 5.15.41  : nubia 官方 5.15.41 树 (main 分支)，clang-14 (r450784d)
-#   - 5.15.167 : Qualcomm kernel.lnx.5.15.c5 重建树 (nx729j-5.15.167 分支)，
-#                用 .scmversion 对齐手机固件版本串 (vendor_dlkm vermagic 严格匹配)
+#   - 5.15.167 : Qualcomm kernel.lnx.5.15.c5 重建树 (nx729j-5.15.167 分支)
 #   - 5.15.104 : ACK 5.15.104 重建树 (nx729j-5.15.104 分支)，单文件 nx729j_defconfig
 #   - 5.15.144 : ACK 5.15.144 重建树 (nx729j-5.15.144 分支)，单文件 nx729j_defconfig
 # 功能开关：enable_* 对应已发布 release 的功能行，关闭后从 .config 移除对应符号
 #           (依赖项由 olddefconfig 自动清理)
-# 自定义版本串：custom_version 填完整版本串(如 5.15.167-android13-8-00020-xxx)，
-#               workflow 自动剥离内核版本号前缀推导 .scmversion 后缀，
-#               用于系统 OTA 更新后固件版本串变化但内核版本号(SUBLEVEL)不变的对齐场景
+# 内核版本串：默认四个版本一律由 git 派生 (5.15.x-g<提交号>)，凭 uname -r 就能认出这次
+#           构建对应的提交。要与手机固件串逐字一致时(如 OTA 后固件串变了但内核 SUBLEVEL
+#           没变)用 custom_version 填完整串，workflow 剥掉版本号前缀写进 .scmversion。
+#           ★ 必须带内核版本号前缀：只写后缀会拼出 "5.15.104%s" 这种串，末尾的校验会判失败。
 # 自动发布：构建成功默认自动创建 GitHub Release (create_release 关闭可跳过)
 # 两套配置机制（由 CONFIG_MODE 区分）：
 #   merge  : 5.15.41 / 5.15.167 —— merge_config.sh 三合一生成 vendor/kalama-NX729J-gki_defconfig；
@@ -113,9 +113,14 @@ jobs:
               BRANCH="nx729j-5.15.167"; CONFIG_MODE="merge"; KALAMA_CFG="kalama_le_GKI.config"
               VERSION_TAG="5.15.167"; CCACHE_KEY="nx729j-gki-5.15.167"
               VER_PREFIX="5.15.167"
-              DEFAULT_FULL="5.15.167-android13-8-00017-gb1f32b310a30-ab12826353"
-              DEFAULT_SCM="-android13-8-00017-gb1f32b310a30-ab12826353"
-              RELEASE_BASE="基于 Qualcomm kernel.lnx.5.15.c5 基底 + nubia 厂商层重建，版本串与手机固件严格对齐"
+              # 不再钉死固件版本串：与 104/144 一样走 git 派生(5.15.167-g<提交号>)，
+              # 这样两次不同构建(如换 KSU 版本)能凭 uname -r 区分开。
+              # 想还原成固件串就把 custom_version 填上(后面要带 -ab... 那一段)：
+              #   5.15.167-android13-8-00017-gb1f32b310a30-ab12826353
+              # 钉子只有 .scmversion 一个来源，三个分支树内都没有提交 localversion*/.scmversion
+              DEFAULT_FULL="5.15.167"
+              DEFAULT_SCM=""
+              RELEASE_BASE="基于 Qualcomm kernel.lnx.5.15.c5 基底 + nubia 厂商层重建"
               ;;
             5.15.104)
               BRANCH="nx729j-5.15.104"; CONFIG_MODE="single"; KALAMA_CFG=""
@@ -427,7 +432,7 @@ jobs:
             done ) &
           HB_PID=$!
           # 去除 -dirty 后缀(编译期 merge 会改动检入的 defconfig 导致 git 树变脏；
-          # 5.15.167 由 .scmversion 固定版本串，此 sed 对其无影响)
+          # 四个版本现在都走 git 派生，所以这条 sed 每个版本都需要)
           sed -i 's/ -dirty//g' scripts/setlocalversion
           sed -i '$i res=$(echo "$res" | sed '\''s/-dirty//g'\'')' scripts/setlocalversion
           echo "=== 编译内核(输出重定向 build.log, 仅失败时显示尾部) ==="
@@ -447,7 +452,7 @@ jobs:
           tail -8 mem.log || true
           echo "=== 编译产物 ==="
           ls -lh out/arch/arm64/boot/Image
-          echo "=== 版本串校验(必须精确匹配固件完整版本串) ==="
+          echo "=== 版本串校验(默认 git 派生串；custom_version 时另加精确比对) ==="
           # 不能用 grep 做「子串搜索」当校验：重复拼接出来的
           #   5.15.1675.15.167-android13-...
           # 里照样含有 5.15.167-android13-...，子串匹配会照常命中，什么都挡不住。
@@ -565,7 +570,16 @@ jobs:
           grep -q '^flash_boot;' anykernel.sh || { echo "::error::anykernel.sh 缺 flash_boot —— 会退回到重打包 ramdisk"; exit 1; }
           grep -q '^do.devicecheck=0' anykernel.sh || { echo "::error::anykernel.sh 的 do.devicecheck 不为 0"; exit 1; }
           ! grep -q 'tuna' anykernel.sh || { echo "::error::anykernel.sh 里混进了上游的 tuna(Galaxy Nexus) 打补丁段"; exit 1; }
-          AK3_NAME="AnyKernel3-NX729J-${{ steps.ver.outputs.VERSION_FULL }}-ReSukiSU.zip"
+          # 包名用「从 Image 里实际抽出的版本串」而不是 VERSION_FULL：默认值只到 5.15.x，
+          # 不含提交号，会让文件名与 release 标题(用的是实际串)对不上、也认不出是哪次构建。
+          # (grep 无匹配时 pipefail 会让赋值直接失败，这里 || true 兜底，改用下面显式判空)
+          VER_ACTUAL=$(strings -a ./Image | grep -oE '5\.15\.[0-9]+(-[A-Za-z0-9._-]+)?' | sort -u | awk 'length > max { max = length; best = $0 } END { print best }' || true)
+          if [ -z "$VER_ACTUAL" ]; then
+            echo "::error::从 Image 抽不到版本串（正常应在编译后的校验步骤就被拦下），拒绝用占位名打包"
+            exit 1
+          fi
+          echo "  Image 实际版本串: $VER_ACTUAL"
+          AK3_NAME="AnyKernel3-NX729J-$VER_ACTUAL-ReSukiSU.zip"
           zip -r9 "../$AK3_NAME" ./* -x '*.git*'
           echo "ak3name=$AK3_NAME" >> "$GITHUB_OUTPUT"
           echo "=== 刷机包已生成: $AK3_NAME ==="
