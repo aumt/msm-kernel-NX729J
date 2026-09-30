@@ -16,7 +16,7 @@
   | `nx729j-5.15.167` | 5.15.167 | Qualcomm `kernel.lnx.5.15.c5` 重建树 | 用 `.scmversion` 对齐手机固件完整版本串，`vendor_dlkm` 模块可正常加载 |
   | `main` | 5.15.41 | nubia 官方 5.15.41 树 | 官方树，版本串由 git hash 生成 |
 
-- **构建方式差异**：`nx729j-5.15.104` / `nx729j-5.15.144` 使用仓库自带的单文件 `arch/arm64/configs/nx729j_defconfig`，且**不含** `.github/workflows/`，请走下方「构建方式二」本地编译；`main` / `nx729j-5.15.167` 使用三合一 `merge_config.sh`，可走「构建方式一」云编译。
+- **构建方式差异**：`nx729j-5.15.104` / `nx729j-5.15.144` 使用仓库自带的单文件 `arch/arm64/configs/nx729j_defconfig`（这两个分支**不含** `.github/workflows/`，但 `main` 上的工作流已支持编译它们）；`main` / `nx729j-5.15.167` 使用三合一 `merge_config.sh`。**四个版本均可走「构建方式一」云编译**，也可走「构建方式二」本地编译。
 - **版本串对齐机制**：`UTS_RELEASE = 内核版本号 + CONFIG_LOCALVERSION + .scmversion`。5.15.167 树将手机固件的完整版本串（如 `5.15.167-android13-8-00017-gb1f32b310a30-ab12826353`）写入 `.scmversion`，编译出的内核版本号与手机原厂内核完全一致。`nx729j-5.15.104` / `nx729j-5.15.144` 开启了 `CONFIG_MODVERSIONS`，模块校验以符号 CRC 为准、比对时跳过版本串前缀，因此无需 `.scmversion` 对齐。
 - **编译工具链**：AOSP LLVM/Clang（云端 `clang-r450784d`，android13 时代 clang-14），`LLVM=1` 全 LLVM 链接，配合 ccache 加速。
 
@@ -51,9 +51,9 @@
 
 ---
 
-## 构建方式一：GitHub Actions（仅 `main` / `nx729j-5.15.167`）
+## 构建方式一：GitHub Actions（四个版本通用）
 
-无需本地环境，在 GitHub 云端完成全部编译、打包、发布。工作流文件 `build-gki.yml` 只存在于 `main` 分支，`nx729j-5.15.104` / `nx729j-5.15.144` 请走「构建方式二」。
+无需本地环境，在 GitHub 云端完成全部编译、打包、发布。工作流文件 `build-gki.yml` 只存在于 `main` 分支，由它按所选 `kernel_version` 检出对应分支来编译，因此 `nx729j-5.15.104` / `nx729j-5.15.144` 同样可以在云端编译。
 
 1. **Fork 本仓库** → 点击右上角 **Fork**。
 2. 进入你的仓库 → **Actions** → 左侧选择 **Build NX729J GKI (Red Magic 8S Pro)** → **Run workflow**。
@@ -61,7 +61,7 @@
 
    | 参数 | 说明 |
    |------|------|
-   | `kernel_version` | 仅两项：`5.15.167`（c5 重建树）或 `5.15.41`（官方树） |
+   | `kernel_version` | 四选一：`5.15.41`（官方树）/ `5.15.104`（ACK 重建树，RedMagicOS 9.0.11MR）/ `5.15.144`（ACK 重建树，移植版 HyperOS 4）/ `5.15.167`（c5 重建树） |
    | `ccache_update` | 源码/配置变更后开启，强制重建缓存（一般保持关闭） |
    | `package_ak3` | 打包 AnyKernel3 刷机包（默认开启） |
    | `custom_version` | **自定义完整版本串**，留空用默认。**获取方法见文末附录**。系统 OTA 更新后固件版本串变化但内核版本号（如 5.15.167）没变时，用它对齐 `vendor_dlkm`。 |
@@ -83,7 +83,7 @@
 ### 1. 环境要求
 
 - **系统**：Debian / Ubuntu 系（其他发行版自行替换包名）
-- **内存**：建议 **≥ 8 GB**
+- **内存**：建议 **≥ 20 GB**（`LTO_CLANG_FULL` 的 `vmlinux` 链接是单进程内存大户，16 GB 会在链接阶段被系统终止）
 - **磁盘**：≥ 30 GB 可用
 - **依赖**：
 
@@ -97,7 +97,7 @@
 ### 2. 克隆源码 + 切分支
 
 ```bash
-git clone https://github.com/aumt/msm-kernel.git msm-kernel
+git clone https://github.com/aumt/msm-kernel-NX729J.git msm-kernel
 cd msm-kernel
 git checkout nx729j-5.15.104        # 5.15.104 ACK 树（与 RedMagicOS 9.0.11MR 出货内核一致）
 # 或 git checkout nx729j-5.15.144   # 5.15.144 ACK 树（移植版 HyperOS 4）
