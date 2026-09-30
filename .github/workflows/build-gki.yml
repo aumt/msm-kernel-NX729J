@@ -5,14 +5,21 @@ name: Build NX729J GKI (Red Magic 8S Pro)
 #   - 5.15.41  : nubia 官方 5.15.41 树 (main 分支)，clang-14 (r450784d)
 #   - 5.15.167 : Qualcomm kernel.lnx.5.15.c5 重建树 (nx729j-5.15.167 分支)，
 #                用 .scmversion 对齐手机固件版本串 (vendor_dlkm vermagic 严格匹配)
+#   - 5.15.104 : ACK 5.15.104 重建树 (nx729j-5.15.104 分支)，单文件 nx729j_defconfig
+#   - 5.15.144 : ACK 5.15.144 重建树 (nx729j-5.15.144 分支)，单文件 nx729j_defconfig
 # 功能开关：enable_* 对应已发布 release 的功能行，关闭后从 .config 移除对应符号
 #           (依赖项由 olddefconfig 自动清理；未提供开关的功能固定不集成，如 KPM/LZ4KD/ADIOS/Re-Kernel)
 # 自定义版本串：custom_version 填完整版本串(如 5.15.167-android13-8-00020-xxx)，
 #               workflow 自动剥离内核版本号前缀推导 .scmversion 后缀，
 #               用于系统 OTA 更新后固件版本串变化但内核版本号(SUBLEVEL)不变的对齐场景
 # 自动发布：构建成功默认自动创建 GitHub Release (create_release 关闭可跳过)
-# 关键：检入的 vendor/kalama-NX729J-gki_defconfig 是 stock 合并产物，
-#       编译前必须先跑 merge_config.sh 三合一重新生成，否则我们的改动进不了 .config。
+# 两套配置机制（由 CONFIG_MODE 区分）：
+#   merge  : 5.15.41 / 5.15.167 —— merge_config.sh 三合一生成 vendor/kalama-NX729J-gki_defconfig；
+#            检入的那份是 stock 合并产物，必须先重新生成，否则我们的改动进不了 .config
+#   single : 5.15.104 / 5.15.144 —— 直接 make nx729j_defconfig（这两个分支树内没有 vendor/ 片段）
+# 关于 LTO：绝不关闭 LTO。关掉 LTO 会连带关掉 CFI_CLANG，module_layout 等符号 CRC 与手机
+#           固件不符 -> 内核无法开机。改为编译前硬校验 LTO/CFI/MODVERSIONS，不符即中止。
+#           代价是 FullLTO 链接内存峰值较高，需 public 仓库的 4 核/16GB runner 才跑得动。
 
 env:
   TZ: Asia/Shanghai
@@ -27,6 +34,8 @@ on:
         type: choice
         options:
           - 5.15.41
+          - 5.15.104
+          - 5.15.144
           - 5.15.167
       ccache_update:
         description: '更新ccache缓存(源码/配置变更后开启)'
@@ -96,23 +105,54 @@ jobs:
         id: ver
         run: |
           set -e
-          if [ "${{ inputs.kernel_version }}" = "5.15.167" ]; then
-            echo "BRANCH=nx729j-5.15.167" >> "$GITHUB_OUTPUT"
-            echo "KALAMA_CFG=kalama_le_GKI.config" >> "$GITHUB_OUTPUT"
-            echo "VERSION_TAG=5.15.167" >> "$GITHUB_OUTPUT"
-            echo "CCACHE_KEY=nx729j-gki-5.15.167" >> "$GITHUB_OUTPUT"
-            VER_PREFIX="5.15.167"
-            DEFAULT_FULL="5.15.167-android13-8-00017-gb1f32b310a30-ab12826353"
-            DEFAULT_SCM="-android13-8-00017-gb1f32b310a30-ab12826353"
-          else
-            echo "BRANCH=main" >> "$GITHUB_OUTPUT"
-            echo "KALAMA_CFG=kalama_GKI.config" >> "$GITHUB_OUTPUT"
-            echo "VERSION_TAG=5.15.41" >> "$GITHUB_OUTPUT"
-            echo "CCACHE_KEY=nx729j-gki-5.15.41" >> "$GITHUB_OUTPUT"
-            VER_PREFIX="5.15.41"
-            DEFAULT_FULL="5.15.41"
-            DEFAULT_SCM=""
-          fi
+          # 每个内核版本：分支 / 配置机制 / 版本串 / ccache 键 / release 基底说明
+          #   CONFIG_MODE=merge  -> merge_config.sh 三合一生成 vendor/kalama-NX729J-gki_defconfig
+          #   CONFIG_MODE=single -> 直接 make arch/arm64/configs/nx729j_defconfig
+          case "${{ inputs.kernel_version }}" in
+            5.15.167)
+              BRANCH="nx729j-5.15.167"; CONFIG_MODE="merge"; KALAMA_CFG="kalama_le_GKI.config"
+              VERSION_TAG="5.15.167"; CCACHE_KEY="nx729j-gki-5.15.167"
+              VER_PREFIX="5.15.167"
+              DEFAULT_FULL="5.15.167-android13-8-00017-gb1f32b310a30-ab12826353"
+              DEFAULT_SCM="-android13-8-00017-gb1f32b310a30-ab12826353"
+              RELEASE_BASE="基于 Qualcomm kernel.lnx.5.15.c5 基底 + nubia 厂商层重建，版本串与手机固件严格对齐"
+              ;;
+            5.15.104)
+              BRANCH="nx729j-5.15.104"; CONFIG_MODE="single"; KALAMA_CFG=""
+              VERSION_TAG="5.15.104"; CCACHE_KEY="nx729j-gki-5.15.104"
+              VER_PREFIX="5.15.104"
+              DEFAULT_FULL="5.15.104"
+              DEFAULT_SCM=""
+              RELEASE_BASE="基于 AOSP ACK 5.15.104 (android13-5.15-2023-07_r3) 重建的 NX729J 树"
+              ;;
+            5.15.144)
+              BRANCH="nx729j-5.15.144"; CONFIG_MODE="single"; KALAMA_CFG=""
+              VERSION_TAG="5.15.144"; CCACHE_KEY="nx729j-gki-5.15.144"
+              VER_PREFIX="5.15.144"
+              DEFAULT_FULL="5.15.144"
+              DEFAULT_SCM=""
+              RELEASE_BASE="基于 AOSP ACK 5.15.144 重建的 NX729J 树"
+              ;;
+            *)
+              BRANCH="main"; CONFIG_MODE="merge"; KALAMA_CFG="kalama_GKI.config"
+              VERSION_TAG="5.15.41"; CCACHE_KEY="nx729j-gki-5.15.41"
+              VER_PREFIX="5.15.41"
+              DEFAULT_FULL="5.15.41"
+              DEFAULT_SCM=""
+              RELEASE_BASE="基于 nubia 官方 5.15.41 树 + nubia 厂商层"
+              ;;
+          esac
+          echo "BRANCH=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "CONFIG_MODE=$CONFIG_MODE" >> "$GITHUB_OUTPUT"
+          echo "KALAMA_CFG=$KALAMA_CFG" >> "$GITHUB_OUTPUT"
+          echo "VERSION_TAG=$VERSION_TAG" >> "$GITHUB_OUTPUT"
+          echo "CCACHE_KEY=$CCACHE_KEY" >> "$GITHUB_OUTPUT"
+          echo "RELEASE_BASE=$RELEASE_BASE" >> "$GITHUB_OUTPUT"
+          echo "=== 版本参数 ==="
+          echo "  kernel_version = ${{ inputs.kernel_version }}"
+          echo "  BRANCH         = $BRANCH"
+          echo "  CONFIG_MODE    = $CONFIG_MODE"
+          echo "  KALAMA_CFG     = ${KALAMA_CFG:-(single 模式不使用)}"
           # custom_version: 非空则覆盖完整版本串, 并剥离内核版本号前缀推导 .scmversion 后缀
           # (UTS_RELEASE = KERNELVERSION + CONFIG_LOCALVERSION + .scmversion,
           #  .scmversion 必须只含后缀, 否则版本串会重复拼接)
@@ -187,7 +227,8 @@ jobs:
             ${{ steps.ver.outputs.CCACHE_KEY }}-${{ runner.os }}-
             ${{ steps.ver.outputs.CCACHE_KEY }}-
 
-      - name: 合并 defconfig (gki + kalama_* + NX729J-perf_diff)
+      - name: 合并 defconfig (gki + kalama_* + NX729J-perf_diff) [仅 merge 模式]
+        if: ${{ steps.ver.outputs.CONFIG_MODE == 'merge' }}
         run: |
           set -e
           echo "=== 使用 kalama 片段: ${{ steps.ver.outputs.KALAMA_CFG }} ==="
@@ -225,25 +266,54 @@ jobs:
           export LLVM=1 LLVM_IAS=1 ARCH=arm64 SUBARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CC="ccache clang"
-          make -j$(nproc) O=out LLVM=1 ARCH=arm64 CC="$CC" LD=ld.lld OBJCOPY=llvm-objcopy vendor/kalama-NX729J-gki_defconfig
+          # kbuild 的 %_defconfig 规则按 arch/arm64/configs/ 下的相对路径取文件名，
+          # 所以 single 模式给 basename（nx729j_defconfig），不能给完整路径
+          if [ "${{ steps.ver.outputs.CONFIG_MODE }}" = "single" ]; then
+            TARGET=nx729j_defconfig
+            echo "=== single 模式: 直接用仓库自带的 arch/arm64/configs/$TARGET ==="
+          else
+            TARGET=vendor/kalama-NX729J-gki_defconfig
+            echo "=== merge 模式: 用上一步 merge_config.sh 生成的那份 ==="
+          fi
+          make -j$(nproc) O=out LLVM=1 ARCH=arm64 CC="$CC" LD=ld.lld OBJCOPY=llvm-objcopy "$TARGET"
           echo "=== .config 实际生效校验 ==="
           grep -E '^CONFIG_(BPF_SYSCALL|BPF_JIT|DEBUG_INFO_BTF|CC_IS_CLANG|CLANG_VERSION|WERROR|LTO_CLANG)=' out/.config
           grep '^CONFIG_KSU=' out/.config
 
-      - name: 配置 .config (关 LTO + 功能开关)
+      - name: 配置 .config (LTO/CFI 门禁 + 功能开关)
         run: |
           set -e
           export PATH="$PWD/clang/bin:$PATH"
           export LLVM=1 LLVM_IAS=1 ARCH=arm64 SUBARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
-          # 1) 关 LTO: 免费 runner(2核/7GB) 跑不动 GKI LTO 链接(LTO vmlinux.o 内存峰值>7GB -> systemd-oomd SIGTERM 杀)。
-          #    gki_defconfig 是 LTO_CLANG_FULL=y, 需同时关 FULL+THIN -> LTO_NONE。功能无感(模块 vermagic 基于 UTS_RELEASE)。
-          echo "=== 关闭 LTO (gki_defconfig LTO_CLANG_FULL -> LTO_NONE) ==="
-          ./scripts/config --file out/.config -d LTO_CLANG_THIN -d LTO_CLANG_FULL -e LTO_NONE
-          make O=out LLVM=1 ARCH=arm64 olddefconfig
-          echo "=== LTO 状态校验(必须 LTO_NONE=y 且无 LTO_CLANG_*) ==="
-          grep '^CONFIG_LTO_NONE=y' out/.config || { echo "!! LTO_NONE 未生效"; exit 1; }
-          if grep -q '^CONFIG_LTO_CLANG' out/.config; then echo "!! LTO_CLANG 仍启用"; exit 1; fi
+          # 1) LTO/CFI 硬门禁 —— 绝不关闭 LTO。
+          #    关掉 LTO 会连带关掉 CFI_CLANG：module_layout 等符号的 CRC 与手机固件不符，
+          #    产物刷进去直接开不了机。所以这一步只校验、绝不修改配置。
+          echo "=== LTO/CFI 门禁校验 ==="
+          gate() {
+            g_sym="$1"; g_want="$2"
+            g_val=$(grep "^CONFIG_${g_sym}=" out/.config | head -1 || true)
+            if [ "$g_want" = "y" ]; then
+              if [ "$g_val" != "CONFIG_${g_sym}=y" ]; then
+                echo "!! 期望 CONFIG_${g_sym}=y，实际: ${g_val:-未设置}"
+                echo "!! 该产物会与手机固件 ABI 不符(刷入无法开机)，中止"
+                exit 1
+              fi
+            else
+              if [ -n "$g_val" ]; then
+                echo "!! 不该出现 $g_val，中止"
+                exit 1
+              fi
+            fi
+            echo "  OK  CONFIG_${g_sym} 符合预期"
+          }
+          gate LTO_CLANG_FULL y
+          gate CFI_CLANG y
+          gate MODVERSIONS y
+          gate LTO_NONE n
+          gate LTO_CLANG_THIN n
+          echo "=== 参考项(不强制，随各版本树能力) ==="
+          grep -E '^CONFIG_(SHADOW_CALL_STACK|CFI_CLANG_SHADOW|CLANG_VERSION|LTO|LTO_CLANG)=' out/.config || true
 
           # 2) 功能开关: 按 enable_* input 累积要关闭的符号, 一次性 olddefconfig (依赖项自动清理)
           DISABLE=""
@@ -357,7 +427,7 @@ jobs:
 
           * 内核版本号: ${VER_ACTUAL}
           * 编译时间: $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M') (CST)
-          * 机型：红魔8S Pro (NX729J) 通用 ${{ steps.ver.outputs.VERSION_TAG }} GKI 2.0 内核（基于 Qualcomm kernel.lnx.5.15.c5 基底 + nubia 厂商层重建，版本串与手机固件严格对齐）
+          * 机型：红魔8S Pro (NX729J) 通用 ${{ steps.ver.outputs.VERSION_TAG }} GKI 2.0 内核（${{ steps.ver.outputs.RELEASE_BASE }}）
           * KSU分支：ReSukiSU
           * susfs支持：${{ steps.ver.outputs.SUSFS }}
           * LZ4支持：${{ steps.ver.outputs.LZ4 }}
