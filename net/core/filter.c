@@ -6886,8 +6886,40 @@ BPF_CALL_3(bpf_sk_assign, struct sk_buff *, skb, struct sock *, sk, u64, flags)
 		return -EOPNOTSUPP;
 	if (unlikely(dev_net(skb->dev) != sock_net(sk)))
 		return -ENETUNREACH;
-	if (unlikely(sk_fullsock(sk) && sk->sk_reuseport))
-		return -ESOCKTNOSUPPORT;
+	/*
+	 * NX729J: SO_REUSEPORT sockets are assignable here.
+	 *
+	 * Upstream refuses them (cf7fbe660f2d, 8e368dc72e86) because
+	 * bpf_sk_lookup_*() picks from a reuseport group by hash without
+	 * running the SK_REUSEPORT program, so the assignment could land on
+	 * the "wrong" socket.  Support only arrived in 6.6 with 9c02bec95954
+	 * ("bpf, net: Support SO_REUSEPORT sockets with bpf_sk_assign"), and
+	 * that commit does not stand alone: it builds on earlier patches of
+	 * the same series which add inet_lookup_reuseport() and change
+	 * skb_steal_sock() to report whether the socket was "prefetched".
+	 *
+	 * daed (dae) needs the relaxation: its tproxy listeners are created
+	 * with SO_REUSEPORT so that the old and new control plane can overlap
+	 * during a reload, but it looks its own listener up in its sockmap
+	 * rather than letting the stack hash-select a group member, and no
+	 * SK_REUSEPORT program is involved -- so the ambiguity above cannot
+	 * arise.  Without this, every assignment failed with -ESOCKTNOSUPPORT
+	 * on 5.15, and control/kern/tproxy.c discards that return value, so
+	 * interception silently blackholed every captured flow.
+	 *
+	 * The refcount contract below needs no change either: every hashed
+	 * listener carries SOCK_RCU_FREE (__inet_hash()), and so does every
+	 * bound UDP socket (udp_lib_get_port()) -- reuseport plays no part in
+	 * that, and connected children have the flag cleared again
+	 * (inet_connection_sock.c).  sk_is_refcounted() is therefore false
+	 * here, no reference is taken, and skb_steal_sock() reaches the same
+	 * conclusion from the sock_pfree destructor.
+	 *
+	 * NOTE(104): upstream 5.15.144 additionally carries
+	 * "if (sk_unhashed(sk)) return -EOPNOTSUPP;" right below, added in
+	 * 5.15.105..144.  ACK 5.15.104 never had it, so it is deliberately not
+	 * backported here; this port is therefore strictly more permissive.
+	 */
 	if (sk_is_refcounted(sk) &&
 	    unlikely(!refcount_inc_not_zero(&sk->sk_refcnt)))
 		return -ENOENT;

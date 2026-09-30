@@ -25,6 +25,25 @@
 #include <linux/bpfptr.h>
 #include <linux/android_kabi.h>
 
+typedef int (*bpf_callback_t)(u64, u64, u64, u64, u64);
+
+/*
+ * Callbacks handed to helpers such as bpf_loop() are JITed BPF subprograms,
+ * and JITed code is not covered by the CFI shadow.  Without __nocfi the
+ * indirect call below is reported as a CFI failure, which aborts the kernel
+ * unless CONFIG_CFI_PERMISSIVE is set -- the same reason
+ * bpf_dispatcher_*_func() is marked __nocfi.
+ *
+ * Keep this out of line: the annotation has to sit on the function that
+ * contains the call, and inlining it into a sanitized caller would let the
+ * check reappear.
+ */
+static noinline __nocfi __maybe_unused
+u64 bpf_call_callback(void *fn, u64 a, u64 b, u64 c, u64 d, u64 e)
+{
+	return ((u64 (*)(u64, u64, u64, u64, u64))fn)(a, b, c, d, e);
+}
+
 struct bpf_verifier_env;
 struct bpf_verifier_log;
 struct perf_event;
@@ -2179,6 +2198,7 @@ extern const struct bpf_func_proto bpf_for_each_map_elem_proto;
 extern const struct bpf_func_proto bpf_btf_find_by_name_kind_proto;
 extern const struct bpf_func_proto bpf_sk_setsockopt_proto;
 extern const struct bpf_func_proto bpf_sk_getsockopt_proto;
+extern const struct bpf_func_proto bpf_loop_proto;
 
 const struct bpf_func_proto *tracing_prog_func_proto(
   enum bpf_func_id func_id, const struct bpf_prog *prog);
