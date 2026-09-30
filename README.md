@@ -1,6 +1,6 @@
 # 红魔 8S Pro (NX729J) 通用内核
 
-> 红魔 8S Pro / 8S Pro+ (NX729S / NX729J, **SM8550 / kalama**, **GKI 2.0**) 自定义内核，基于 Qualcomm `kernel.lnx.5.15.c5` 基底 + nubia 厂商层重建，内核版本串与手机固件**严格对齐**（`vendor_dlkm` vermagic 匹配，可正常加载原厂内核模块）。集成 **KernelSU (ReSukiSU 分支)** 与 SUSFS 等特性，支持 GitHub Actions 云编译与 Linux 服务器本地编译两种方式。
+> 红魔 8S Pro / 8S Pro+ (NX729S / NX729J, **SM8550 / kalama**, **GKI 2.0**) 自定义内核，按内核版本分为多个分支（见下方「分支说明」），内核版本串与手机固件**严格对齐**（`vendor_dlkm` vermagic 匹配，可正常加载原厂内核模块）。集成 **KernelSU (ReSukiSU 分支)** 与 SUSFS 等特性，支持 GitHub Actions 云编译与 Linux 服务器本地编译两种方式。
 
 ---
 
@@ -11,10 +11,13 @@
 
   | 分支 | 内核版本 | 基底 | 说明 |
   |------|----------|------|------|
-  | `main` | 5.15.41 | nubia 官方 5.15.41 树 | 官方树，版本串由 git hash 生成 |
+  | `nx729j-5.15.104` | 5.15.104 | ACK `android13-5.15-2023-07_r3` | 与红魔8S Pro 原厂出货内核（**RedMagicOS 9.0.11MR**）版本号严格一致；**已实机验证** |
+  | `nx729j-5.15.144` | 5.15.144 | ACK `android13-5.15-2024-02` | 与设备出货内核版本号严格一致，适配**移植版 HyperOS 4**；**已实机验证** |
   | `nx729j-5.15.167` | 5.15.167 | Qualcomm `kernel.lnx.5.15.c5` 重建树 | 用 `.scmversion` 对齐手机固件完整版本串，`vendor_dlkm` 模块可正常加载 |
+  | `main` | 5.15.41 | nubia 官方 5.15.41 树 | 官方树，版本串由 git hash 生成 |
 
-- **版本串对齐机制**：`UTS_RELEASE = 内核版本号 + CONFIG_LOCALVERSION + .scmversion`。5.15.167 树将手机固件的完整版本串（如 `5.15.167-android13-8-00017-gb1f32b310a30-ab12826353`）写入 `.scmversion`，编译出的内核版本号与手机原厂内核完全一致。
+- **构建方式差异**：`nx729j-5.15.104` / `nx729j-5.15.144` 使用仓库自带的单文件 `arch/arm64/configs/nx729j_defconfig`，且**不含** `.github/workflows/`，请走下方「构建方式二」本地编译；`main` / `nx729j-5.15.167` 使用三合一 `merge_config.sh`，可走「构建方式一」云编译。
+- **版本串对齐机制**：`UTS_RELEASE = 内核版本号 + CONFIG_LOCALVERSION + .scmversion`。5.15.167 树将手机固件的完整版本串（如 `5.15.167-android13-8-00017-gb1f32b310a30-ab12826353`）写入 `.scmversion`，编译出的内核版本号与手机原厂内核完全一致。`nx729j-5.15.104` / `nx729j-5.15.144` 开启了 `CONFIG_MODVERSIONS`，模块校验以符号 CRC 为准、比对时跳过版本串前缀，因此无需 `.scmversion` 对齐。
 - **编译工具链**：AOSP LLVM/Clang（云端 `clang-r450784d`，android13 时代 clang-14），`LLVM=1` 全 LLVM 链接，配合 ccache 加速。
 
 ---
@@ -48,9 +51,9 @@
 
 ---
 
-## 构建方式一：GitHub Actions（推荐）
+## 构建方式一：GitHub Actions（仅 `main` / `nx729j-5.15.167`）
 
-无需本地环境，在 GitHub 云端完成全部编译、打包、发布。
+无需本地环境，在 GitHub 云端完成全部编译、打包、发布。工作流文件 `build-gki.yml` 只存在于 `main` 分支，`nx729j-5.15.104` / `nx729j-5.15.144` 请走「构建方式二」。
 
 1. **Fork 本仓库** → 点击右上角 **Fork**。
 2. 进入你的仓库 → **Actions** → 左侧选择 **Build NX729J GKI (Red Magic 8S Pro)** → **Run workflow**。
@@ -58,7 +61,7 @@
 
    | 参数 | 说明 |
    |------|------|
-   | `kernel_version` | `5.15.167`（推荐，c5 重建树）或 `5.15.41`（官方树） |
+   | `kernel_version` | 仅两项：`5.15.167`（c5 重建树）或 `5.15.41`（官方树） |
    | `ccache_update` | 源码/配置变更后开启，强制重建缓存（一般保持关闭） |
    | `package_ak3` | 打包 AnyKernel3 刷机包（默认开启） |
    | `custom_version` | **自定义完整版本串**，留空用默认。**获取方法见文末附录**。系统 OTA 更新后固件版本串变化但内核版本号（如 5.15.167）没变时，用它对齐 `vendor_dlkm`。 |
@@ -80,7 +83,7 @@
 ### 1. 环境要求
 
 - **系统**：Debian / Ubuntu 系（其他发行版自行替换包名）
-- **内存**：建议 **≥ 8 GB**。若 < 8 GB，**必须关闭 LTO**（见步骤 6），否则链接阶段会 OOM
+- **内存**：建议 **≥ 8 GB**
 - **磁盘**：≥ 30 GB 可用
 - **依赖**：
 
@@ -96,8 +99,10 @@
 ```bash
 git clone https://github.com/aumt/msm-kernel.git msm-kernel
 cd msm-kernel
-git checkout nx729j-5.15.167        # 5.15.167 c5 重建树（推荐）
-# 或 git checkout main             # 5.15.41 官方树
+git checkout nx729j-5.15.104        # 5.15.104 ACK 树（与 RedMagicOS 9.0.11MR 出货内核一致）
+# 或 git checkout nx729j-5.15.144   # 5.15.144 ACK 树（移植版 HyperOS 4）
+# 或 git checkout nx729j-5.15.167   # 5.15.167 c5 重建树
+# 或 git checkout main              # 5.15.41 官方树
 ```
 
 ### 3. 准备 clang（二选一）
@@ -118,9 +123,11 @@ clang/bin/clang --version | head -n1
 sudo apt-get install -y clang lld llvm
 ```
 
-### 4. 合并 defconfig（三合一）
+### 4. 准备 defconfig
 
-与 `build.config.msm.common` 同参数的 `merge_config.sh`，把 GKI 基础 + 厂商 kalama 片段 + NX729J 差分配置合并为完整 defconfig：
+**`nx729j-5.15.104` / `nx729j-5.15.144`**：使用仓库自带的单文件 `arch/arm64/configs/nx729j_defconfig`，本步骤无需操作（步骤 6 直接用该名字生成 `.config`）。
+
+**`main` / `nx729j-5.15.167`**：与 `build.config.msm.common` 同参数的 `merge_config.sh`，把 GKI 基础 + 厂商 kalama 片段 + NX729J 差分配置合并为完整 defconfig：
 
 ```bash
 KCONFIG_CONFIG=arch/arm64/configs/vendor/kalama-NX729J-gki_defconfig \
@@ -132,7 +139,9 @@ KCONFIG_CONFIG=arch/arm64/configs/vendor/kalama-NX729J-gki_defconfig \
 
 > `main`（5.15.41）分支将 `kalama_le_GKI.config` 换成 `kalama_GKI.config`。
 
-### 5. 版本串对齐（仅 5.15.167 需要）
+### 5. 版本串对齐（仅 `nx729j-5.15.167` 需要）
+
+`nx729j-5.15.104` / `nx729j-5.15.144` 已开启 `CONFIG_MODVERSIONS`，模块校验比对时跳过版本串前缀，本步骤可跳过。
 
 把手机固件的完整版本串**去内核版本号前缀后的部分**写入 `.scmversion`（`.scmversion` 只含后缀，否则版本串会重复拼接）：
 
@@ -150,27 +159,24 @@ export LLVM=1 LLVM_IAS=1 ARCH=arm64 SUBARCH=arm64
 export CROSS_COMPILE=aarch64-linux-gnu-
 export CC="ccache clang"
 
-# 生成 .config（步骤 4 的合并产物）
+# 生成 .config
+# main / nx729j-5.15.167：步骤 4 合并出的 defconfig
 make -j$(nproc) O=out LLVM=1 ARCH=arm64 CC="$CC" LD=ld.lld OBJCOPY=llvm-objcopy vendor/kalama-NX729J-gki_defconfig
-
-# 内存 < 8 GB 时：关闭 LTO（gki_defconfig 默认 LTO_CLANG_FULL，链接内存峰值 > 7 GB 会 OOM）
-# 功能无影响（SUSFS/KSU/eBPF 不依赖 LTO，模块 vermagic 基于 UTS_RELEASE）
-./scripts/config --file out/.config -d LTO_CLANG_THIN -d LTO_CLANG_FULL -e LTO_NONE
-make O=out LLVM=1 ARCH=arm64 olddefconfig
-grep -E '^CONFIG_LTO(NONE|_CLANG)' out/.config   # 确认 LTO_NONE=y 且无 LTO_CLANG
+# nx729j-5.15.104 / nx729j-5.15.144：仓库自带的单文件 defconfig
+# make -j$(nproc) O=out LLVM=1 ARCH=arm64 CC="$CC" LD=ld.lld OBJCOPY=llvm-objcopy nx729j_defconfig
 
 # 编译内核（约 40–60 分钟）
 make -j$(nproc) O=out LLVM=1 ARCH=arm64 CC="$CC" LD=ld.lld OBJCOPY=llvm-objcopy Image
 ```
 
-> 如需自定义功能开关，参照上方「功能特性」表，在 `make olddefconfig` 之后用 `./scripts/config --file out/.config -d <符号>` 关闭对应符号并再次 `make olddefconfig`。
+> 如需自定义功能开关，参照上方「功能特性」表，用 `./scripts/config --file out/.config -d <符号>` 关闭对应符号，再执行 `make O=out LLVM=1 ARCH=arm64 olddefconfig` 收敛配置。
 
 ### 7. 校验产物
 
 ```bash
 ls -lh out/arch/arm64/boot/Image
 
-# 校验版本串是否与固件完整版本串精确匹配（5.15.167）
+# 校验版本串是否与固件完整版本串精确匹配（仅 nx729j-5.15.167）
 strings -a out/arch/arm64/boot/Image | grep -oE "5.15.167-android13-8-00017-gb1f32b310a30-ab12826353" | sort -u
 ```
 
@@ -229,10 +235,12 @@ ls -lh AnyKernel3-NX729J-*.zip
 
 **用途**：手机系统 OTA 更新后，固件的完整版本串会变化（如 `...-00017-...` → `...-00020-...`），但内核版本号（如 `5.15.167`）可能不变。此时内核模块（`vendor_dlkm`）的 vermagic 要求与新固件一致，若用旧版本串编译会导致模块加载失败。把新固件的完整版本串填入 `custom_version`（云端）或写入 `.scmversion`（本地），即可让编译出的内核版本串与新固件严格对齐。
 
+> `nx729j-5.15.104` / `nx729j-5.15.144` 开启了 `CONFIG_MODVERSIONS`，模块校验改为比对符号 CRC、比对时跳过版本串前缀，OTA 后无需重新对齐版本串。
+
 ---
 
 ## 目录结构（与本项目相关）
 
-- `.github/workflows/build-gki.yml` — GitHub Actions 构建工作流（编译 + 打包 + 自动发布）
-- `arch/arm64/configs/` — `gki_defconfig`、`vendor/kalama*`、`vendor/NX729J-perf_diff.config`
+- `.github/workflows/build-gki.yml` — GitHub Actions 构建工作流（编译 + 打包 + 自动发布），**仅存在于 `main` 分支**
+- `arch/arm64/configs/` — `gki_defconfig`；`nx729j_defconfig`（`nx729j-5.15.104` / `nx729j-5.15.144`）；`vendor/kalama*`、`vendor/NX729J-perf_diff.config`（`nx729j-5.15.167` / `main`）
 - `vendor/` — nubia 厂商层 / 厂商内核模块源码
