@@ -439,14 +439,25 @@ jobs:
           # 不能用 grep 做「子串搜索」当校验：重复拼接出来的
           #   5.15.1675.15.167-android13-...
           # 里照样含有 5.15.167-android13-...，子串匹配会照常命中，什么都挡不住。
-          VER_ACTUAL=$(strings -a out/arch/arm64/boot/Image | grep -m1 -aoE 'Linux version [^ ]+' | sed 's/^Linux version //')
-          echo "  实际: ${VER_ACTUAL:-（Image 里没找到 Linux version 串）}"
+          # ★ 抽取必须带 [0-9] 锚点：Image 里另有一条更靠前的格式串
+          #   "Linux version %s (%s)"（偏移约 33.2M），真 banner 在其后（约 36.1M）。
+          #   不带锚点会被诱饵抢先命中，抽出字面量 "%s" 而误判失败。
+          # 取最长匹配，与下面 Release step 同口径，再多诱饵也不会选错。
+          VER_ACTUAL=$(strings -a out/arch/arm64/boot/Image \
+            | grep -oE 'Linux version [0-9][^ ]*' \
+            | sed 's/^Linux version //' \
+            | sort -u | awk 'length > m { m = length; b = $0 } END { print b }')
+          if [ -z "$VER_ACTUAL" ]; then
+            echo "::error::Image 里没找到 'Linux version <版本号>' 串(抽取结果为空)"
+            exit 1
+          fi
+          echo "  实际: $VER_ACTUAL"
           echo "  期望: ${{ steps.ver.outputs.VERSION_FULL }}"
           KTAG="${{ steps.ver.outputs.VERSION_TAG }}"
           N_TAG=$(printf '%s' "$VER_ACTUAL" | grep -oF "$KTAG" | wc -l)
           if [ "$N_TAG" -ne 1 ]; then
             echo "::error::内核版本号 $KTAG 在版本串里出现 $N_TAG 次(应为 1 次): $VER_ACTUAL"
-            echo "::error::.scmversion 只能放后缀 (UTS_RELEASE = KERNELVERSION + LOCALVERSION + .scmversion)"
+            echo "::error::出现 0 次 ⇒ 抽取抓错了串；出现 2 次 ⇒ .scmversion 里放了完整串，它只能放后缀 (UTS_RELEASE = KERNELVERSION + LOCALVERSION + .scmversion)"
             exit 1
           fi
           if [ -n "${{ steps.ver.outputs.SCM_VER }}" ] && [ "$VER_ACTUAL" != "${{ steps.ver.outputs.VERSION_FULL }}" ]; then
