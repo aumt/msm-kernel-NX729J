@@ -2089,7 +2089,7 @@ static int bpf_for_each_hash_elem(struct bpf_map *map, void *callback_fn,
 				val = elem->key + roundup_key_size;
 			}
 			num_elems++;
-			ret = BPF_CAST_CALL(callback_fn)((u64)(long)map,
+			ret = bpf_call_callback(callback_fn, (u64)(long)map,
 					(u64)(long)key, (u64)(long)val,
 					(u64)(long)callback_ctx, 0);
 			/* return value: 0 - continue, 1 - stop and return */

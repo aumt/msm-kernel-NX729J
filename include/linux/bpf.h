@@ -27,6 +27,23 @@
 
 typedef int (*bpf_callback_t)(u64, u64, u64, u64, u64);
 
+/*
+ * Callbacks handed to helpers such as bpf_loop() are JITed BPF subprograms,
+ * and JITed code is not covered by the CFI shadow.  Without __nocfi the
+ * indirect call below is reported as a CFI failure, which aborts the kernel
+ * unless CONFIG_CFI_PERMISSIVE is set -- the same reason
+ * bpf_dispatcher_*_func() is marked __nocfi.
+ *
+ * Keep this out of line: the annotation has to sit on the function that
+ * contains the call, and inlining it into a sanitized caller would let the
+ * check reappear.
+ */
+static noinline __nocfi __maybe_unused
+u64 bpf_call_callback(void *fn, u64 a, u64 b, u64 c, u64 d, u64 e)
+{
+	return ((u64 (*)(u64, u64, u64, u64, u64))fn)(a, b, c, d, e);
+}
+
 struct bpf_verifier_env;
 struct bpf_verifier_log;
 struct perf_event;
