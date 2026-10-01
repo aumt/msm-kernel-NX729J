@@ -788,7 +788,22 @@ emit_cond_jmp:
 		u64 imm64;
 
 		imm64 = (u64)insn1.imm << 32 | (u32)imm;
-		emit_a64_mov_i64(dst, imm64, ctx);
+		if (insn->src_reg == BPF_PSEUDO_FUNC)
+			/*
+			 * A BPF_PSEUDO_FUNC ldimm64 is later rewritten in
+			 * jit_subprogs() to carry the real subprog address, so
+			 * the same insn is emitted twice with two different
+			 * immediates (first pass: subprog id, second pass: the
+			 * address).  emit_a64_mov_i64() emits a value-dependent
+			 * number of insns, which would make the two passes
+			 * disagree on the image size and trip the extra-pass
+			 * check in jit_subprogs() ("JIT doesn't support
+			 * bpf-to-bpf calls").  Kernel addresses fit in 48 bits,
+			 * so use the fixed-length sequence instead.
+			 */
+			emit_addr_mov_i64(dst, imm64, ctx);
+		else
+			emit_a64_mov_i64(dst, imm64, ctx);
 
 		return 1;
 	}
