@@ -61,6 +61,13 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(block_bio_complete);
 EXPORT_TRACEPOINT_SYMBOL_GPL(block_split);
 EXPORT_TRACEPOINT_SYMBOL_GPL(block_unplug);
 EXPORT_TRACEPOINT_SYMBOL_GPL(block_rq_insert);
+EXPORT_TRACEPOINT_SYMBOL_GPL(block_rq_complete);
+
+/*
+ * For type visibility
+ */
+const struct blk_mq_alloc_data *GKI_struct_blk_mq_alloc_data;
+EXPORT_SYMBOL_GPL(GKI_struct_blk_mq_alloc_data);
 
 DEFINE_IDA(blk_queue_ida);
 

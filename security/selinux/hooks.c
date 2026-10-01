@@ -104,6 +104,12 @@
 #include "audit.h"
 #include "avc_ss.h"
 
+/*
+ * For type visibility
+ */
+struct selinux_state *GKI_struct_selinux_state;
+EXPORT_SYMBOL_GPL(GKI_struct_selinux_state);
+
 struct selinux_state selinux_state;
 #ifdef CONFIG_KSU_SUSFS
 extern struct selinux_state fake_state;

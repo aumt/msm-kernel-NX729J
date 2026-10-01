@@ -17,6 +17,7 @@
 #include <linux/igmp.h>
 #include <linux/ipc_namespace.h>
 #include <linux/mtd/mtd.h>
+#include <linux/pagemap.h>
 #include <linux/pr.h>
 #include <linux/skmsg.h>
 #include <linux/statfs.h>
@@ -400,3 +401,15 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_tune_inactive_ratio);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_check_hibernation_swap);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_save_cpu_resume);
 EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_save_hib_resume_bdev);
+
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_killed_process);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_kmalloc_slab);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_save_track_hash);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_rvh_update_readahead_gfp_mask);
+EXPORT_TRACEPOINT_SYMBOL_GPL(android_vh_record_pcpu_rwsem_starttime);
+
+/*
+ * For type visibility
+ */
+const struct readahead_control *GKI_struct_readahead_control;
+EXPORT_SYMBOL_GPL(GKI_struct_readahead_control);

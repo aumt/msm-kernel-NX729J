@@ -80,6 +80,10 @@ DECLARE_HOOK(android_vh_record_percpu_rwsem_lock_starttime,
 	TP_PROTO(struct task_struct *tsk, unsigned long settime_jiffies),
 	TP_ARGS(tsk, settime_jiffies));
 
+DECLARE_HOOK(android_vh_record_pcpu_rwsem_starttime,
+	TP_PROTO(struct task_struct *tsk, unsigned long settime_jiffies),
+	TP_ARGS(tsk, settime_jiffies));
+
 #endif /* _TRACE_HOOK_DTASK_H */
 /* This part must be outside protection */
 #include <trace/define_trace.h>

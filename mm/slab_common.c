@@ -698,6 +698,10 @@ struct kmem_cache *
 kmalloc_caches[NR_KMALLOC_TYPES][KMALLOC_SHIFT_HIGH + 1] __ro_after_init =
 { /* initialization for https://bugs.llvm.org/show_bug.cgi?id=42570 */ };
 EXPORT_SYMBOL(kmalloc_caches);
+/* This variable is intentionally unused. Preserved for KMI stability. */
+bool android_kmalloc_64_create __ro_after_init;
+EXPORT_SYMBOL(android_kmalloc_64_create);
+
 
 /*
  * Conversion table for small slabs sizes / 8 to the index in the

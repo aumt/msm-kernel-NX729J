@@ -26,6 +26,19 @@ void _trace_android_vh_record_percpu_rwsem_lock_starttime(struct task_struct *ts
 }
 EXPORT_SYMBOL_GPL(_trace_android_vh_record_percpu_rwsem_lock_starttime);
 
+/*
+ * trace_android_vh_record_pcpu_rwsem_starttime  is called in
+ * include/linux/percpu-rwsem.h by including include/hooks/dtask.h, which
+ * will result to build-err. So we create
+ * func:_trace_android_vh_record_pcpu_rwsem_starttime for percpu-rwsem.h to call.
+ */
+void _trace_android_vh_record_pcpu_rwsem_starttime(struct task_struct *tsk,
+		unsigned long settime)
+{
+	trace_android_vh_record_pcpu_rwsem_starttime(tsk, settime);
+}
+EXPORT_SYMBOL_GPL(_trace_android_vh_record_pcpu_rwsem_starttime);
+
 int __percpu_init_rwsem(struct percpu_rw_semaphore *sem,
 			const char *name, struct lock_class_key *key)
 {
