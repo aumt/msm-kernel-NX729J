@@ -53,7 +53,7 @@ on:
         type: string
         default: ''
       resukisu_ref:
-        description: 'KernelSU(ReSukiSU)源码版本，留空=vendored(仓库内副本，最可复现)。可填: latest(拉上游 main tip，等于「每次CI都更新」)、tag/提交号、或 ReSukiSU_CI release 上的 versionCode(如 35193，脚本反查对应上游提交)。版本号口径 = 30000 + 提交数 + 700，与管理器 versionCode 一致。'
+        description: 'KernelSU(ReSukiSU)源码版本，留空=vendored(仓库内副本，最可复现)。可填: latest(拉上游 main tip，等于「每次CI都更新」)、tag/提交号、或 ReSukiSU_CI release 上的 versionCode(如 35193)。versionCode 口径 = 30000 + 提交数 + 700，与管理器一致；反查是精确的(算全部提交的祖先数)，但上游历史有合并 ⇒ 有些数值没有对应提交，这时会明确报错并给出邻近可用值，改用 tag/提交号即可。'
         required: false
         type: string
         default: ''
@@ -275,6 +275,18 @@ jobs:
             # 也不能加 --single-branch：那样 susfs-dev 之类的开发分支就 checkout 不到了。
             git clone --quiet https://github.com/ReSukiSU/ReSukiSU KernelSU
             cd KernelSU
+            # ★ 克隆出来的仓库不一定有本地 main 分支：源仓库 HEAD 处于 detached 状态时
+            #   (例如从一个 detached 的本地副本克隆)，git clone 只给 detached HEAD +
+            #   refs/remotes/origin/main，本地 main 不存在。这时后面那句
+            #   `git rev-list --count main` 会直接 fatal —— rc=128 且日志里没有任何
+            #   ::error，只有一行 git 自己的报错，很难看出是这个原因。统一补齐本地 main，
+            #   顺带把「没有 main」从静默 fatal 变成明确报错。
+            if ! git rev-parse --verify --quiet 'refs/heads/main^{commit}' > /dev/null; then
+              git rev-parse --verify --quiet 'refs/remotes/origin/main^{commit}' > /dev/null \
+                || { echo "::error::克隆下来既没有本地 main 也没有 origin/main(上游把默认分支改名了?)"; exit 1; }
+              git branch --quiet main refs/remotes/origin/main
+              echo "  (克隆里没有本地 main，已按 origin/main 补建)"
+            fi
             case "$REF" in
               latest|main|HEAD)
                 git rev-parse --verify --quiet 'main^{commit}' > /dev/null \
@@ -286,20 +298,100 @@ jobs:
                 # ★ 必须先显式验 ref 存在：git checkout 失败若只靠 shell 的 -e 兜，
                 #   一旦哪天真没兜住，就会静默留在 main tip 上 —— 你以为钉住了某个 tag，
                 #   实际编的是 main，而且版本号自洽性检查也看不出问题(它只比对自算的数)。
-                git rev-parse --verify --quiet "${REF}^{commit}" > /dev/null \
-                  || { echo "::error::上游 ReSukiSU 里没有这个 tag/提交: $REF"; exit 1; }
-                git checkout --quiet "$REF"
+                #   分支名也要认：克隆里只有 refs/remotes/origin/<分支>，
+                #   `git rev-parse <分支>` 直接查是查不到的，但 `git checkout <分支>`
+                #   会 DWIM 从 origin/<分支> 建本地分支 —— 所以这里两处都验一遍。
+                if git rev-parse --verify --quiet "${REF}^{commit}" > /dev/null; then
+                  git checkout --quiet "$REF"
+                elif git rev-parse --verify --quiet "refs/remotes/origin/${REF}^{commit}" > /dev/null; then
+                  git checkout --quiet "$REF"      # DWIM: 从 origin/$REF 建本地分支
+                else
+                  echo "::error::上游 ReSukiSU 里没有这个 tag/分支/提交: $REF"; exit 1
+                fi
                 SRC="upstream ref=$REF"
                 ;;
               *)
                 WANT="$REF"
                 N=$((REF - 30700))
                 [ "$N" -ge 1 ] || { echo "::error::versionCode $REF 不合理(应 > 30700)"; exit 1; }
-                TOT=$(git rev-list --count main)
-                [ "$N" -le "$TOT" ] || { echo "::error::上游 main 只有 $TOT 个提交，取不到第 $N 个(versionCode $REF)"; exit 1; }
-                C=$(git rev-list --reverse main | sed -n "${N}p")
+                command -v python3 > /dev/null \
+                  || { echo "::error::按 versionCode 反查提交需要 python3(用来精确算祖先数，runner 上应当自带)"; exit 1; }
+                # ★ versionCode 的定义 = 30700 + rev-list --count HEAD，即「祖先个数」。
+                #   反查没有便宜的等价做法。三个已经用实测否掉的"聪明办法"记在这里，
+                #   免得以后又被"优化"回去：
+                #   ① 「rev-list --reverse main 的第 N 个」是列表位置，不是 count。
+                #      main 上有 73 个合并提交 ⇒ 实测 69 个取样点里 8 个不等；最极端的
+                #      第 2850 个提交 count 只有 244 —— 会静默解析成一个不相干的版本。
+                #   ② 只在 first-parent 链上二分也不行：链上 count 严格递增、二分本身合法，
+                #      但这个仓库有多条平行的根血脉，侧线上的提交 count 很小却可能是很晚
+                #      才被合并进来的 ⇒ 链上那两个提交夹出的区间罩不到它们。
+                #      （实测 3 个真有提交的靶子，3 个都被假报成"取不到"。）
+                #   ③ count 的取值既不连续(实测 4495 个提交里有 654 个值没有任何提交取到)，
+                #      也会被多个提交共用(652 个值，多为并行的根提交)。
+                #   所以老老实实算全表：拓扑序单遍 + 位集求祖先集并集，一次 rev-list +
+                #   纯内存运算，亚秒级。（逐提交跑 rev-list --count 同样精确，但实测 69 秒，
+                #   且随历史增长是 O(N²)；位集版的两份实现已互相对照过：空洞数/碰撞数/锚点全同。）
+                #   ↓↓↓ 注意下面 python 的缩进：必须正好写在本 run 块的基准缩进(12 空格)处，
+                #       去缩进后落在第 0 列，heredoc 的终止符才认；也不能比 12 空格更浅 ——
+                #       YAML 块标量的内容缩进由第一行决定，更浅的行会直接终止整个 run 块。
+                C=$(python3 - "$N" <<'PY'
+          import subprocess, sys
+          from collections import defaultdict
+
+          want = int(sys.argv[1])
+
+          # 一次 rev-list 拿到 main 全部提交及其父；--topo-order --reverse ⇒ 父必排在子前面
+          r = subprocess.run(['git', 'rev-list', 'main', '--topo-order', '--reverse', '--parents'],
+                             capture_output=True, text=True)
+          if r.returncode:
+              sys.exit('git rev-list 失败: %s' % r.stderr.strip())
+
+          bits, order = {}, []
+          for line in r.stdout.split('\n'):
+              parts = line.split()
+              if not parts:
+                  continue
+              b = 1 << len(order)          # 自己
+              for p in parts[1:]:
+                  b |= bits[p]             # 父的祖先集（拓扑序保证父已经算过）
+              bits[parts[0]] = b
+              order.append(parts[0])
+
+          total = len(order)
+          if total > 60000:
+              sys.exit('main 已有 %d 个提交，位集全表占内存过大；请改用 tag 或提交号' % total)
+
+          # count = 祖先数(含自己)，与 versionCode 同口径
+          byn = defaultdict(list)
+          for s in order:                  # order 是"从旧到新"，故 byn[k][-1] 是拓扑上最新的
+              byn[bin(bits[s]).count('1')].append(s)
+          hi = max(byn)
+
+          print('  main 提交数 = %d，count 最大值 = %d' % (total, hi), file=sys.stderr)
+
+          hits = byn.get(want)
+          if not hits:
+              print('  ✗ 上游 main 里没有任何提交的 count 等于 %d（versionCode %d）' % (want, want + 30700),
+                    file=sys.stderr)
+              lo = [k for k in range(want - 1, 0, -1) if k in byn]
+              up = [k for k in range(want + 1, hi + 1) if k in byn]
+              if lo:
+                  print('    往下的最近可用值: versionCode %d' % (lo[0] + 30700), file=sys.stderr)
+              if up:
+                  print('    往上的最近可用值: versionCode %d' % (up[0] + 30700), file=sys.stderr)
+              print('    有合并的历史就会这样：上游 %d 个 count 值里有 %d 个没有任何提交取到'
+                    % (hi, sum(1 for k in range(1, hi + 1) if k not in byn)), file=sys.stderr)
+              sys.exit(0)                  # 空输出 ⇒ 让外层报 ::error（别在这里非零退出，
+                                           #   那会被 set -e 直接掐掉，日志里就没有 ::error 了）
+          if len(hits) > 1:
+              print('  ⚠ 有 %d 个提交的 count 都等于 %d（并行血脉），取拓扑上最新的那个；全部: %s'
+                    % (len(hits), want, ' '.join(s[:12] for s in hits)), file=sys.stderr)
+          print(hits[-1])
+          PY
+                )
+                [ -n "$C" ] || { echo "::error::上游 main 里没有 versionCode $REF 对应的提交，原因见上面的诊断"; echo "::error::resukisu_ref 也可以直接填 tag 或提交号"; exit 1; }
                 git checkout --quiet "$C"
-                SRC="upstream versionCode $REF ⇒ main 第 $N 个提交"
+                SRC="upstream versionCode $REF ⇒ 提交 $(git rev-parse --short=12 "$C")"
                 ;;
             esac
             V=$(git rev-list --count HEAD)
@@ -320,7 +412,7 @@ jobs:
 
           # 接线完整性：软链接必须是软链接(内核是从 drivers/kernelsu 进 KSU 源码的)
           [ -L drivers/kernelsu ] || { echo "::error::drivers/kernelsu 不是软链接，接线被改坏了"; exit 1; }
-          [ -f KernelSU/kernel/Kbuild ] || { echo "::error::KernelSU/kernel/Kbuild 不存在"; exit 1; }
+          [ -f KernelSU/kernel/Kbuild ] || { echo "::error::KernelSU/kernel/Kbuild 不存在（若填的是 versionCode 或很老的 tag，多半是解析出来的提交太老 —— 那时 KernelSU 还不是这个目录布局，内核侧的接线也对不上）"; exit 1; }
           [ -f KernelSU/kernel/core/init.c ] || { echo "::error::KernelSU 源码不完整(缺 core/init.c)"; exit 1; }
 
           echo "KernelSU 来源   : $SRC"
