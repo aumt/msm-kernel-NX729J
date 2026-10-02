@@ -229,7 +229,11 @@ jobs:
           # googlesource 上 r450784e 无 tag 可下，r450784d 确认可从 android-platform-13.0.0_r28 tag 下载）
           echo "正在下载 clang-${{ env.CLANG_VER }} ..."
           mkdir -p clang
-          curl -fL "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-platform-13.0.0_r28/clang-${{ env.CLANG_VER }}.tar.gz" -o clang.tar.gz
+          # googlesource 的 +archive 是按需打包端点，实测约 1/12 概率直接回 503（Google 通用错误页、
+          # 无 Retry-After），重试就好了。curl 的 --retry 本来就把 408/429/5xx 当 transient 错误重试，
+          # --retry-all-errors 再兜住「传输中途断掉」这类非 HTTP 错误。
+          curl -fL --retry 10 --retry-delay 5 --retry-all-errors \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-platform-13.0.0_r28/clang-${{ env.CLANG_VER }}.tar.gz" -o clang.tar.gz
           tar -xzf clang.tar.gz -C clang
           rm -f clang.tar.gz
           clang/bin/clang --version | head -n1
