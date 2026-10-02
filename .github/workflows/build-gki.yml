@@ -331,8 +331,8 @@ jobs:
                 #   所以老老实实算全表：拓扑序单遍 + 位集求祖先集并集，一次 rev-list +
                 #   纯内存运算，亚秒级。（逐提交跑 rev-list --count 同样精确，但实测 69 秒，
                 #   且随历史增长是 O(N²)；位集版的两份实现已互相对照过：空洞数/碰撞数/锚点全同。）
-                #   ↓↓↓ 注意下面 python 的缩进：必须正好写在本 run 块的基准缩进(12 空格)处，
-                #       去缩进后落在第 0 列，heredoc 的终止符才认；也不能比 12 空格更浅 ——
+                #   ↓↓↓ 注意下面 python 的缩进：必须正好写在本 run 块的基准缩进(10 空格)处，
+                #       去缩进后落在第 0 列，heredoc 的终止符才认；也不能比 10 空格更浅 ——
                 #       YAML 块标量的内容缩进由第一行决定，更浅的行会直接终止整个 run 块。
                 C=$(python3 - "$N" <<'PY'
           import subprocess, sys
@@ -743,6 +743,86 @@ jobs:
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.ver.outputs.CCACHE_KEY }}-${{ runner.os }}-${{ github.ref_name }}
+
+      - name: KMI 闸门 (厂商模块 ABI 比对)
+        run: |
+          set -e
+          # 目的：证明这次编出来的内核，手机上那些【预编译】的厂商模块还装得上。
+          #   厂商 .ko 的 __versions 段记着它编译时依赖的每个内核符号的 CRC；CRC 由函数原型
+          #   算出，所以任何一个 CRC 变了都说明 ABI 真的动了 —— 那种内核刷进去会开不了机
+          #   或掉功能（最典型：误用 GNU ld ⇒ LTO_NONE ⇒ CFI_CLANG 连带消失 ⇒ 一大批 CRC 变样）。
+          #   参考表 kmi/nx729j-<版本>.crc.tsv = 「厂商要求 ∩ 我们导出」的 (符号, CRC) 快照，
+          #   由本机全量验收后生成并提交（来历见 kmi/README.md）。
+          # 放在打包之前、ccache 保存之后：闸门红了就不出刷机包、不发 Release，但不浪费这次
+          #   25 分钟的 ccache。
+          # 没有参考表的版本会明确打印「跳过」而不是静默变绿。
+          KV="${{ steps.ver.outputs.VERSION_TAG }}"
+          TABLE="kmi/nx729j-${KV}.crc.tsv"
+          SYM=out/vmlinux.symvers
+          # 手机侧 module_layout 的期望值（575 个厂商模块一致）。故意硬编码、不从表里读：
+          #   万一哪天有人拿一个坏构建重新生成了表，这个常量仍能把它兜住。
+          ML_MUST="0x0222dd63"
+          # 功能开关非默认时，被关掉的子系统会让相关符号消失 —— 那是用户的选择，不是回归，
+          #   故「未导出」降级为告警；但 CRC 不符与开关无关，任何情况下都硬失败。
+          STRICT=1
+          for v in "${{ steps.ver.outputs.SUSFS }}" "${{ steps.ver.outputs.LZ4 }}" "${{ steps.ver.outputs.NETWORK }}" "${{ steps.ver.outputs.BBBRUTAL }}" "${{ steps.ver.outputs.DROIDSPACES }}" "${{ steps.ver.outputs.BBG }}" "${{ steps.ver.outputs.EBPF }}"; do
+            [ "$v" = "true" ] || STRICT=0
+          done
+          echo "=== KMI 闸门 (kernel_version=$KV, 参考表 $TABLE, 严格模式=$STRICT) ==="
+
+          if [ ! -f "$TABLE" ]; then
+            echo "本内核版本($KV)暂无 KMI 参考表: $TABLE"
+            echo "⇒ 跳过 KMI 闸门（表需由本机验收后生成并提交，见 kmi/README.md）"
+            exit 0
+          fi
+          [ -s "$SYM" ] || { echo "::error::缺 $SYM，无法做 KMI 比对"; exit 1; }
+
+          # 1) module_layout —— 单这一个数就能看出 ABI 有没有整体走样
+          ML_GOT=$(awk -F'\t' '$2=="module_layout"{print $1; exit}' "$SYM")
+          if [ "$ML_GOT" != "$ML_MUST" ]; then
+            echo "::error::module_layout CRC 不符: 实际 ${ML_GOT:-（未导出）}，厂商模块要求 $ML_MUST"
+            echo "::error::这个数一变，575 个厂商模块全装不上（典型成因: LTO 被关 ⇒ CFI_CLANG 连带消失）"
+            exit 1
+          fi
+          ML_TAB=$(awk -F'\t' '$1=="module_layout"{print $2; exit}' "$TABLE")
+          if [ -n "$ML_TAB" ] && [ "$ML_TAB" != "$ML_MUST" ]; then
+            echo "::error::参考表里的 module_layout=$ML_TAB 与设备常量 $ML_MUST 不一致 —— 表陈旧或生成有误"
+            exit 1
+          fi
+          echo "  ✓ module_layout = $ML_MUST （与手机 575 个厂商模块一致）"
+
+          # 2) 逐符号 CRC
+          #   表: 符号<TAB>CRC       vmlinux.symvers: CRC<TAB>符号<TAB>模块<TAB>导出类型
+          #   awk 里别用 exp 当数组名 —— exp() 是内置函数，会报一个指错位置的 syntax error。
+          OUT=$(awk -F'\t' '
+            /^#/ { next }
+            FNR==NR { if (NF>=2) { n++; want[$1]=$2 } next }
+            { have[$2]=$1 }
+            END {
+              miss=0; bad=0
+              for (s in want) {
+                if (!(s in have))          { miss++; if (miss<=15) printf "      未导出: %s\n", s }
+                else if (have[s]!=want[s]) { bad++;  if (bad<=15)  printf "      CRC 不符: %s  期望 %s  实际 %s\n", s, want[s], have[s] }
+              }
+              printf "  参考表 %d 个符号: 未导出 %d, CRC 不符 %d\n", n, miss, bad
+              printf "  KMI-SUMMARY miss=%d bad=%d\n", miss, bad
+            }' "$TABLE" "$SYM")
+          echo "$OUT"
+          bad=$(echo "$OUT"  | sed -n 's/.*KMI-SUMMARY miss=[0-9]* bad=\([0-9]*\).*/\1/p')
+          miss=$(echo "$OUT" | sed -n 's/.*KMI-SUMMARY miss=\([0-9]*\) bad=[0-9]*.*/\1/p')
+          if [ "${bad:-0}" -ne 0 ]; then
+            echo "::error::有 $bad 个符号的 CRC 与本内核不一致 —— 厂商模块会装载失败(-ENOEXEC)"
+            echo "::error::关功能开关只会让符号消失、不会改 CRC，所以这是真正的 ABI 变更"
+            exit 1
+          fi
+          if [ "${miss:-0}" -ne 0 ]; then
+            if [ "$STRICT" = "1" ]; then
+              echo "::error::有 $miss 个厂商模块需要的符号本内核没导出（功能开关全为默认，故非开关所致）"
+              exit 1
+            fi
+            echo "::warning::有 $miss 个厂商需要的符号未导出 —— 功能开关非默认(关掉了子系统)，降级为告警"
+          fi
+          echo "  ✓ KMI 闸门通过"
 
       - name: 打包 AnyKernel3 刷机包
         if: inputs.package_ak3
