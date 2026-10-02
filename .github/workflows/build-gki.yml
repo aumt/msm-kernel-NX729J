@@ -52,6 +52,11 @@ on:
         required: false
         type: string
         default: ''
+      resukisu_ref:
+        description: 'KernelSU(ReSukiSU)源码版本，留空=vendored(仓库内副本，最可复现)。可填: latest(拉上游 main tip，等于「每次CI都更新」)、tag/提交号、或 ReSukiSU_CI release 上的 versionCode(如 35193，脚本反查对应上游提交)。版本号口径 = 30000 + 提交数 + 700，与管理器 versionCode 一致。'
+        required: false
+        type: string
+        default: ''
       enable_susfs:
         description: 'SUSFS 支持(内核级隐藏 root)'
         required: true
@@ -220,6 +225,114 @@ jobs:
         run: |
           echo "${{ steps.ver.outputs.SCM_VER }}" > .scmversion
           echo "已写入 .scmversion: $(cat .scmversion)"
+
+      - name: 集成 KernelSU (ReSukiSU)
+        id: ksu
+        run: |
+          # ============================================================
+          # 版本号口径(与上游/管理器完全一致):
+          #   versionCode = 30000 + (git rev-list --count HEAD) + 700 = 30700 + 提交数
+          # 上游 ReSukiSU/manager 的 build.gradle.kts 就是这么算的，
+          # cctv18/ReSukiSU_CI 每个 release 的**名字**(v35193 之类)也正好是这个 versionCode。
+          # 所以那个 CI 仓库可以当"版本锚点"用：拿它的 release 名就能反查出上游对应的提交。
+          # ============================================================
+          REF="${{ inputs.resukisu_ref }}"
+          # 允许写成 v35193 —— 但只有「v 后面整串都是数字」才当 versionCode 剥掉 v。
+          # 不能用 v[0-9]* 判：那个 * 会把 v4.2.0-rc3 这种合法 tag 也吃掉，剥成 4.2.0-rc3 就找不到了。
+          case "$REF" in
+            v*)
+              _R="${REF#v}"
+              case "$_R" in
+                ''|*[!0-9]*) ;;          # v 后面不是纯数字 ⇒ 是 tag，原样保留
+                *) REF="$_R" ;;
+              esac
+              ;;
+          esac
+          WANT=''
+          SRC=''
+          V=''
+          TAG=''
+          SHA=''
+
+          if [ -z "$REF" ]; then
+            SRC="vendored(仓库内副本)"
+            V=$(sed -n 's/^KSU_LOCAL_VERSION := \([0-9]*\)$/\1/p' KernelSU/kernel/Kbuild | head -1)
+            TAG=$(sed -n 's/^KSU_TAG_NAME    := "\(.*\)"$/\1/p' KernelSU/kernel/Kbuild | head -1)
+            SHA=$(sed -n 's/^KSU_COMMIT_SHA  := "\(.*\)"$/\1/p' KernelSU/kernel/Kbuild | head -1)
+            [ -n "$V" ] || { echo "::error::读不到 KernelSU/kernel/Kbuild 里的 KSU_LOCAL_VERSION"; exit 1; }
+          else
+            # 上游 kernel/setup.sh 干的是 git clone + git stash + 建软链接。
+            # 对着仓库里已经存在(但没有 .git)的 KernelSU/ 跑，git stash 会 fatal，
+            # 所以这里整目录换掉。
+            # 内核侧的接线(drivers/kernelsu 软链接、drivers/Makefile 的 obj-$(CONFIG_KSU)、
+            # drivers/Kconfig 的 source)四条分支都已经就位，换完源码即可，不需要再动内核侧。
+            echo "从上游拉取 KernelSU: ref=$REF"
+            rm -rf KernelSU
+            # 不用 --filter=blob:none：那会留下一个 promisor(部分克隆) remote，
+            # 编译期一旦碰到没取回的 blob 就会触发 lazy fetch —— 把联网依赖塞进构建里，
+            # 而且 kbuild 的 git diff-index 判 dirty 时也可能要 blob。
+            # 这仓库不大，普通克隆多花几秒，换掉这一类不确定性。
+            # 也不能加 --single-branch：那样 susfs-dev 之类的开发分支就 checkout 不到了。
+            git clone --quiet https://github.com/ReSukiSU/ReSukiSU KernelSU
+            cd KernelSU
+            case "$REF" in
+              latest|main|HEAD)
+                git rev-parse --verify --quiet 'main^{commit}' > /dev/null \
+                  || { echo "::error::上游没有 main 分支(改名了?)"; exit 1; }
+                git checkout --quiet main
+                SRC="upstream main tip(每次构建都取最新)"
+                ;;
+              *[!0-9]*)
+                # ★ 必须先显式验 ref 存在：git checkout 失败若只靠 shell 的 -e 兜，
+                #   一旦哪天真没兜住，就会静默留在 main tip 上 —— 你以为钉住了某个 tag，
+                #   实际编的是 main，而且版本号自洽性检查也看不出问题(它只比对自算的数)。
+                git rev-parse --verify --quiet "${REF}^{commit}" > /dev/null \
+                  || { echo "::error::上游 ReSukiSU 里没有这个 tag/提交: $REF"; exit 1; }
+                git checkout --quiet "$REF"
+                SRC="upstream ref=$REF"
+                ;;
+              *)
+                WANT="$REF"
+                N=$((REF - 30700))
+                [ "$N" -ge 1 ] || { echo "::error::versionCode $REF 不合理(应 > 30700)"; exit 1; }
+                TOT=$(git rev-list --count main)
+                [ "$N" -le "$TOT" ] || { echo "::error::上游 main 只有 $TOT 个提交，取不到第 $N 个(versionCode $REF)"; exit 1; }
+                C=$(git rev-list --reverse main | sed -n "${N}p")
+                git checkout --quiet "$C"
+                SRC="upstream versionCode $REF ⇒ main 第 $N 个提交"
+                ;;
+            esac
+            V=$(git rev-list --count HEAD)
+            TAG=$(git describe --abbrev=0 --tags 2>/dev/null || echo unknown)
+            SHA=$(git rev-parse --short=8 HEAD)
+            cd ..
+          fi
+
+          KSUVER=$((30000 + V + 700))
+
+          # 给了 versionCode 就必须自洽：反查到的提交，其 rev-list 计数要能算出同一个数。
+          # 这条挡的是"上游改了计数方式/我们把 N 算错了"这类错配。
+          if [ -n "$WANT" ] && [ "$KSUVER" != "$WANT" ]; then
+            echo "::error::版本号自洽性检查失败: 期望 $WANT，由提交数算出来是 $KSUVER"
+            exit 1
+          fi
+          [ "$KSUVER" -gt 30700 ] || { echo "::error::版本号异常: $KSUVER"; exit 1; }
+
+          # 接线完整性：软链接必须是软链接(内核是从 drivers/kernelsu 进 KSU 源码的)
+          [ -L drivers/kernelsu ] || { echo "::error::drivers/kernelsu 不是软链接，接线被改坏了"; exit 1; }
+          [ -f KernelSU/kernel/Kbuild ] || { echo "::error::KernelSU/kernel/Kbuild 不存在"; exit 1; }
+          [ -f KernelSU/kernel/core/init.c ] || { echo "::error::KernelSU 源码不完整(缺 core/init.c)"; exit 1; }
+
+          echo "KernelSU 来源   : $SRC"
+          echo "KernelSU 提交   : $SHA  ($TAG)"
+          echo "提交数 rev-list : $V"
+          echo "版本号          : 30000 + $V + 700 = $KSUVER"
+
+          echo "KSUVER=$KSUVER" >> "$GITHUB_ENV"
+          echo "KSUVER=$KSUVER" >> "$GITHUB_OUTPUT"
+          echo "KSUSHA=$SHA" >> "$GITHUB_OUTPUT"
+          echo "KSUTAG=$TAG" >> "$GITHUB_OUTPUT"
+          echo "KSUSRC=$SRC" >> "$GITHUB_OUTPUT"
 
       - name: 安装依赖 + 下载 AOSP clang
         run: |
@@ -492,6 +605,31 @@ jobs:
             exit 1
           fi
           echo "  ✓ $VER_ACTUAL  (内核版本号恰好出现 1 次)"
+
+          echo "=== KernelSU 版本校验 ==="
+          # 证明「这次编进去的 KSU 就是上面那步选定的版本」。
+          # drivers/kernelsu/Kbuild 里有一行 $(info -- $(REPO_NAME) version code: $(KSU_VERSION))，
+          # 它只在 kbuild 真的下降到 drivers/kernelsu/(即 CONFIG_KSU=y) 时才打印 ⇒ 是「真参与了编译」的证据，
+          # 不是从 .config 反推出来的。
+          KSU_WANT="${{ steps.ksu.outputs.KSUVER }}"
+          KSU_GOT=$(grep -oE 'version code: [0-9]+' build.log 2>/dev/null | awk '{print $NF}' | sort -u | tr '\n' ' ') || true
+          echo "  期望版本号: $KSU_WANT"
+          echo "  build.log 里打印的版本号: ${KSU_GOT:-（无）}"
+          case " $KSU_GOT " in
+            *" $KSU_WANT "*) ;;
+            *) echo "::error::KSU 版本号不符: 期望 $KSU_WANT, build.log 里是 [${KSU_GOT:-空}]"
+               echo "::error::（打印为空 ⇒ CONFIG_KSU 没生效, 或 kbuild 没下降到 drivers/kernelsu）"
+               exit 1 ;;
+          esac
+          for f in out/drivers/kernelsu/built-in.a out/drivers/kernelsu/core/init.o out/drivers/kernelsu/selinux/selinux.o; do
+            [ -s "$f" ] || { echo "::error::缺 KernelSU 目标文件: $f"; exit 1; }
+          done
+          echo "  ✓ KernelSU $KSU_WANT 已编入 (目标文件齐全)"
+          if strings -a out/arch/arm64/boot/Image | grep -q 'ReSukiSU'; then
+            echo "  ✓ Image 内含 ReSukiSU 字面量"
+          else
+            echo "  ⚠ Image 里没找到 ReSukiSU 字面量 (仅提示, 不作为失败判据)"
+          fi
           cp out/.config ./compiled.config
           echo "ccache 状态:"; ccache -s
 
@@ -589,7 +727,11 @@ jobs:
             exit 1
           fi
           echo "  Image 实际版本串: $VER_ACTUAL"
-          AK3_NAME="AnyKernel3-NX729J-$VER_ACTUAL-ReSukiSU.zip"
+          # 包名带上 KSU 版本号：不刷机也能一眼看出这个 zip 装的是哪版 ReSukiSU
+          # （KSUVER 由「集成 KernelSU」那步写进 GITHUB_ENV；:? 是为了万一没设置就立刻报出来，
+          #   而不是生成一个 ...-ReSukiSU-.zip 这种名字）
+          : "${KSUVER:?KSUVER 未设置 —— 「集成 KernelSU (ReSukiSU)」那步没跑或没导出}"
+          AK3_NAME="AnyKernel3-NX729J-$VER_ACTUAL-ReSukiSU-$KSUVER.zip"
           zip -r9 "../$AK3_NAME" ./* -x '*.git*'
           echo "ak3name=$AK3_NAME" >> "$GITHUB_OUTPUT"
           echo "=== 刷机包已生成: $AK3_NAME ==="
@@ -620,7 +762,7 @@ jobs:
           * 内核版本号: ${VER_ACTUAL}
           * 编译时间: $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M') (CST)
           * 机型：红魔8S Pro (NX729J) 通用 ${{ steps.ver.outputs.VERSION_TAG }} GKI 2.0 内核（${{ steps.ver.outputs.RELEASE_BASE }}）
-          * KSU分支：ReSukiSU
+          * KSU分支：ReSukiSU (版本号 ${KSUVER}，上游提交 ${{ steps.ksu.outputs.KSUSHA }}，来源：${{ steps.ksu.outputs.KSUSRC }})
           * susfs支持：${{ steps.ver.outputs.SUSFS }}
           * LZ4支持：${{ steps.ver.outputs.LZ4 }}
           * 网络功能增强：${{ steps.ver.outputs.NETWORK }}
