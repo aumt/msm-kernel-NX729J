@@ -68,7 +68,7 @@ endif
 ifeq ($(LOCAL_GIT_EXISTS),1)
 $(shell cd $(KSU_SRC); [ -f ../.git/shallow ] && $(GIT_BIN) fetch --unshallow)
 KSU_LOCAL_VERSION := $(shell cd $(KSU_SRC); $(GIT_BIN) rev-list --count HEAD)
-KSU_TAG_NAME    := $(shell cd $(KSU_SRC); $(GIT_BIN) describe --abbrev=0 --tags 2>/dev/null || echo "v4.2.0-rc1")
+KSU_TAG_NAME    := $(shell cd $(KSU_SRC); $(GIT_BIN) describe --abbrev=0 --tags 2>/dev/null || echo "v4.2.0-rc3")
 KSU_COMMIT_SHA  := $(shell cd $(KSU_SRC); $(GIT_BIN) rev-parse --short=8 HEAD 2>/dev/null || echo "unknown")
 ifneq ($(shell cd $(KSU_SRC); $(GIT_BIN) diff-index --quiet HEAD; echo $$?),0)
 KSU_COMMIT_SHA  := $(KSU_COMMIT_SHA)-dirty
@@ -76,13 +76,13 @@ endif
 KSU_BRANCH_NAME := $(shell cd $(KSU_SRC); $(GIT_BIN) branch --show-current 2>/dev/null || echo "unknown")
 else
 # ==== 本地改动（vendored 拷贝，无 .git）====
-# 上游 ReSukiSU 提交 3380d41f2043644d0ef6c0e0e91be6b229024d00
-#   git rev-list --count HEAD = 4437   =>  KSU_VERSION = 30000 + 4437 + 700 = 35137
-# 35137 与管理器（manager/build.gradle.kts: 30000 + getGitCommitCount() + 700）一致。
+# 上游 ReSukiSU 提交 83850e8e93c5...
+#   git rev-list --count HEAD = 4489  =>  KSU_VERSION = 30000 + 4489 + 700 = 35189
+# 35189 与管理器（manager/build.gradle.kts: 30000 + getGitCommitCount() + 700）一致。
 # 升级 KSU 时须同步更新这三个值。
-KSU_LOCAL_VERSION := 4437
-KSU_TAG_NAME    := "v4.2.0-rc1"
-KSU_COMMIT_SHA  := "3380d41f"
+KSU_LOCAL_VERSION := 4489
+KSU_TAG_NAME    := "v4.2.0-rc3"
+KSU_COMMIT_SHA  := "83850e8e"
 KSU_BRANCH_NAME := "main"
 endif
 
@@ -123,6 +123,10 @@ endif
 else
 KERNEL_TYPE := GKI 2.0
 endif
+
+ifneq ($(shell test $(VERSION) -ge 4; echo $$?),0)
+KERNEL_TYPE := Non-GKI (Legacy)
+endif
 $(info -- KERNEL_VERSION: $(KERNEL_VERSION))
 $(info -- KERNEL_TYPE: $(KERNEL_TYPE))
 
@@ -132,6 +136,8 @@ else ifeq ($(CONFIG_X86_64),y)
   kernelsu-objs += hook/x86_64/patch_memory.o
 else ifeq ($(CONFIG_ARM),y)
   kernelsu-objs += hook/arm32/patch_memory.o
+else ifeq ($(CONFIG_RISCV),y)
+  kernelsu-objs += hook/riscv64/patch_memory.o
 else
   ifeq ($(CONFIG_KSU),y)
     $(info -- Unsupported arch)
@@ -165,6 +171,8 @@ ifdef CONFIG_KSU_TRACEPOINT_HOOK
     kernelsu-objs += hook/arm64/syscall_hook.o
   else ifeq ($(CONFIG_X86_64),y)
     kernelsu-objs += hook/x86_64/syscall_hook.o
+  else ifeq ($(CONFIG_RISCV),y
+    kernelsu-objs += hook/riscv64/syscall_hook.o
   else
     ifeq ($(CONFIG_KSU), y)
       $(info -- Unsupported arch)
