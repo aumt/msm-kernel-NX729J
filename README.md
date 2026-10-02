@@ -251,3 +251,39 @@ ls -lh AnyKernel3-NX729J-*.zip
 - `arch/arm64/configs/` — `gki_defconfig`；`nx729j_defconfig`（`nx729j-5.15.104` / `nx729j-5.15.144`）；`vendor/kalama*`、`vendor/NX729J-perf_diff.config`（`nx729j-5.15.167` / `nx729j-5.15.41`）
 - `vendor/` — nubia 厂商层 / 厂商内核模块源码
 - `THIRD_PARTY_NOTICES.md` — 第三方代码（KernelSU / SUSFS / Baseband-guard / Brutal）的来源与许可证说明
+
+---
+
+## 致谢
+
+本项目做的事情主要是「选基底 → 移植特性 → 打通编译与打包」，真正的技术工作来自下面这些项目，在此一并致谢。
+
+**内核基底**
+
+- [Android Common Kernel (ACK)](https://android.googlesource.com/kernel/common/) — `nx729j-5.15.104` / `nx729j-5.15.144` 的基底
+- **Qualcomm `kernel.lnx.5.15.c5` 发布树** — `nx729j-5.15.167` 的基底
+- **nubia（努比亚）官方 5.15.41 内核源码与厂商层** — `nx729j-5.15.41` 的基底，本仓库 `vendor/` 部分即来源于此
+
+**内核特性**
+
+- [KernelSU](https://github.com/tiann/KernelSU) / [ReSukiSU](https://github.com/ReSukiSU/ReSukiSU) — 内核级 root（本仓库内嵌 ReSukiSU 分支）
+- [SUSFS4KSU](https://gitlab.com/simonpunk/susfs4ksu) — 内核级隐藏
+- **Baseband-guard**（Github@showdo）— 防格基带保护 LSM
+- **Brutal** — TCP 拥塞控制算法（`net/ipv4/brutal.c`）
+
+**构建与打包**
+
+- [AOSP LLVM/Clang 预编译工具链](https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86) — 与云端、文档中一致的 `clang-r450784d`
+- [ccache](https://ccache.dev/) — 编译缓存加速
+- [AnyKernel3](https://github.com/osm0sis/AnyKernel3)（osm0sis）— 刷机包模板
+- GitHub 官方 action：`actions/checkout` / `actions/cache` / `actions/upload-artifact`
+
+**管理器**
+
+- [ReSukiSU_CI](https://github.com/cctv18/ReSukiSU_CI) — ReSukiSU 管理器的构建与发布
+
+各第三方代码的具体来源、版本与许可证，见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+
+最后也感谢所有反馈问题、帮忙测试的机友。
+
+> 本项目为个人自用而建，与上述任何项目均无隶属关系，也不是它们的官方产物。
