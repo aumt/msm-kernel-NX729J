@@ -2,7 +2,7 @@ name: Build NX729J GKI (Red Magic 8S Pro)
 
 # 红魔 8S Pro (NX729S/NX729J, SM8550/kalama, GKI 2.0)
 # 支持多内核版本构建（workflow_dispatch 选择 kernel_version）：
-#   - 5.15.41  : nubia 官方 5.15.41 树 (main 分支)，clang-14 (r450784d)
+#   - 5.15.41  : nubia 官方 5.15.41 树 (nx729j-5.15.41 分支，仓库默认分支)，clang-14 (r450784d)
 #   - 5.15.167 : Qualcomm kernel.lnx.5.15.c5 重建树 (nx729j-5.15.167 分支)
 #   - 5.15.104 : ACK 5.15.104 重建树 (nx729j-5.15.104 分支)，单文件 nx729j_defconfig
 #   - 5.15.144 : ACK 5.15.144 重建树 (nx729j-5.15.144 分支)，单文件 nx729j_defconfig
@@ -138,13 +138,19 @@ jobs:
               DEFAULT_SCM=""
               RELEASE_BASE="基于 AOSP ACK 5.15.144 重建的 NX729J 树"
               ;;
-            *)
-              BRANCH="main"; CONFIG_MODE="merge"; KALAMA_CFG="kalama_GKI.config"
+            5.15.41)
+              BRANCH="nx729j-5.15.41"; CONFIG_MODE="merge"; KALAMA_CFG="kalama_GKI.config"
               VERSION_TAG="5.15.41"; CCACHE_KEY="nx729j-gki-5.15.41"
               VER_PREFIX="5.15.41"
               DEFAULT_FULL="5.15.41"
               DEFAULT_SCM=""
               RELEASE_BASE="基于 nubia 官方 5.15.41 树 + nubia 厂商层"
+              ;;
+            *)
+              # ★ 这里不再兜底成 41。分支名一旦写错(或分支被改名)，checkout 会抓到错分支、
+              #   甚至直接失败，而编出来的产物看起来却一切正常 —— 宁可在这一步就红。
+              echo "::error::未知的内核版本 '${{ inputs.kernel_version }}'，拒绝继续(可选值见本文件顶部的版本说明)"
+              exit 1
               ;;
           esac
           echo "BRANCH=$BRANCH" >> "$GITHUB_OUTPUT"
@@ -201,8 +207,8 @@ jobs:
         id: built
         run: |
           # ★ Release 的 tag 必须指向「产物对应的代码」。
-          #   gh release create 不给 --target 时用的是仓库默认分支(main)，
-          #   而 main 是导入树、根本不是这次编的代码 —— 历史那批 targetCommitish=main 就是这么来的。
+          #   gh release create 不给 --target 时用的是仓库默认分支，
+          #   而那未必是这次编的代码 —— 历史那批 targetCommitish 指错就是这么来的。
           #   这里把 checkout 后的 HEAD 固化下来：即使编译期间 BRANCH 又前进，
           #   tag 也仍然精确指向「实际编译的那一笔」。
           SHA=$(git rev-parse HEAD)
@@ -622,8 +628,8 @@ jobs:
 
           #### ※※※ 刷写内核有风险，可能导致无法开机、WIFI/指纹/基带异常等。刷写前务必备份 boot 分区（TWRP 或 Android 工具箱）。刷入后如遇问题请回刷官方 boot.img。※※※
           EOF
-          # ★ --target 必须显式给：不给时 gh 用仓库默认分支(main)建 tag，
-          #   而 main 是导入树、不是这次编的代码 —— tag 里的代码与产物对不上。
+          # ★ --target 必须显式给：不给时 gh 用仓库默认分支建 tag，
+          #   而那未必是这次编的代码 —— tag 里的代码与产物会对不上。
           #   优先用「实际编译的那一笔」，退化才用产物分支；两者皆空宁可失败也别发错。
           TARGET="${{ steps.built.outputs.sha }}"
           if [ -z "$TARGET" ]; then
@@ -631,7 +637,7 @@ jobs:
             echo "::warning::拿不到产物提交 sha，回退用分支名做 --target: $TARGET"
           fi
           if [ -z "$TARGET" ]; then
-            echo "::error::产物提交 sha 与分支名都为空，拒绝发布(否则 tag 会落到默认分支 main)"
+            echo "::error::产物提交 sha 与分支名都为空，拒绝发布(否则 tag 会落到仓库默认分支)"
             exit 1
           fi
           echo "=== 发布 Release: $TAG  (--target $TARGET) ==="
