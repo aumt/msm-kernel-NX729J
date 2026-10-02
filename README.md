@@ -1,6 +1,6 @@
 # 红魔 8S Pro (NX729J) 通用内核
 
-> 红魔 8S Pro / 8S Pro+ (NX729S / NX729J, **SM8550 / kalama**, **GKI 2.0**) 自定义内核，按内核版本分为多个分支（见下方「分支说明」）。内核版本串默认由 git 派生（`5.15.x-g<提交号>`），需要与手机固件串**逐字一致**时用 `custom_version` 指定（`vendor_dlkm` vermagic 匹配，可正常加载原厂内核模块）。集成 **KernelSU (ReSukiSU 分支)** 与 SUSFS 等特性，支持 GitHub Actions 云编译与 Linux 服务器本地编译两种方式。
+> 红魔 8S Pro (**NX729J**, **SM8550 / kalama**, **GKI 2.0**) 自定义内核，按内核版本分为多个分支（见下方「分支说明」）。内核版本串默认由 git 派生（`5.15.x-g<提交号>`），需要与手机固件串**逐字一致**时用 `custom_version` 指定（`vendor_dlkm` vermagic 匹配，可正常加载原厂内核模块）。集成 **KernelSU (ReSukiSU 分支)** 与 SUSFS 等特性，支持 GitHub Actions 云编译与 Linux 服务器本地编译两种方式。
 
 ---
 
@@ -44,6 +44,8 @@
 
 ## ⚠️ 刷机风险警告
 
+- **适配机型**：本项目的全部开发与验收（厂商模块 ABI 比对、实机刷入）**只在红魔 8S Pro (NX729J)** 上完成。其它同平台（SM8550 / kalama）机型**均未实测**，不保证可用。
+- 刷机包内 `do.devicecheck=0`，**不做设备型号校验** —— 它不会替你拦住刷错的机型，请自行确认设备后再刷。
 - 刷写内核**有风险**，可能导致无法开机、WIFI/指纹/基带异常等。
 - 刷写前务必备份 `boot` 分区（TWRP 或 Android 工具箱）。
 - 刷入后如遇问题，请回刷官方 `boot.img`。

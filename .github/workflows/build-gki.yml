@@ -1,6 +1,6 @@
 name: Build NX729J GKI (Red Magic 8S Pro)
 
-# 红魔 8S Pro (NX729S/NX729J, SM8550/kalama, GKI 2.0)
+# 红魔 8S Pro (NX729J, SM8550/kalama, GKI 2.0)
 # 支持多内核版本构建（workflow_dispatch 选择 kernel_version）：
 #   - 5.15.41  : nubia 官方 5.15.41 树 (nx729j-5.15.41 分支，仓库默认分支)，clang-14 (r450784d)
 #   - 5.15.167 : Qualcomm kernel.lnx.5.15.c5 重建树 (nx729j-5.15.167 分支)
