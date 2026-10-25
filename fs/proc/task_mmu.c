@@ -301,7 +301,8 @@ show_map_vma(struct seq_file *m, struct vm_area_struct *vma)
 			if (!ret) {
 				pgoff = ((loff_t)vma->vm_pgoff) << PAGE_SHIFT;
 				start = vma->vm_start;
-				end = VMA_PAD_START(vma);
+				/* 本树无 pgsize migration 特性，VMA 无填充页 */
+				end = vma->vm_end;
 				show_vma_header_prefix(m, start, end, flags, pgoff, dev, ino);
 				seq_pad(m, ' ');
 				if (spoofed_redirected_name)
